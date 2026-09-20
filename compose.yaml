@@ -1,0 +1,113 @@
+name: quantum-data-lake
+
+services:
+  postgres:
+    image: postgres:16.9-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-quantum_lake}
+      POSTGRES_USER: ${POSTGRES_USER:-quantum}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quantum-course-only}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "${POSTGRES_USER:-quantum}" -d "${POSTGRES_DB:-quantum_lake}"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-quantum}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-quantum-course-only}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - mc
+        - ready
+        - local
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:4.8.1-standalone
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  workspace:
+    build:
+      context: .
+      dockerfile: docker/pipeline.Dockerfile
+    environment:
+      LAKE_BACKEND: minio
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-quantum}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-quantum-course-only}
+      S3_BUCKET: ${S3_BUCKET:-quantum-lake}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-quantum_lake}
+      POSTGRES_USER: ${POSTGRES_USER:-quantum}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quantum-course-only}
+      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-quantum-course}
+      PYTHONPATH: /workspace/src
+    command:
+      - sh
+      - -c
+      - >-
+        jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+        --IdentityProvider.token="$${JUPYTER_TOKEN}"
+        --ServerApp.allow_origin="*"
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"
+    volumes:
+      - ./starter:/workspace
+      - ./datasets/student-bundle/core:/course-data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  seed:
+    image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
+    profiles:
+      - tools
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-quantum}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-quantum-course-only}
+      S3_BUCKET: ${S3_BUCKET:-quantum-lake}
+    volumes:
+      - ./datasets/student-bundle/core:/seed:ro
+      - ./init/minio/seed.sh:/seed.sh:ro
+    entrypoint:
+      - /bin/sh
+      - /seed.sh
+    depends_on:
+      minio:
+        condition: service_healthy
+
+volumes:
+  minio-data:
+  postgres-data:

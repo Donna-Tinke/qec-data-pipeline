@@ -1,0 +1,34 @@
+{
+  "bundle_version": 3,
+  "objects": [
+    {
+      "bytes": 144172,
+      "mandatory": true,
+      "path": "raw/source=qasmbench/qasmbench-qec.zip",
+      "sha256": "60307f88e34b1f752b94223d6d136da72c629b4b625ac6d1c30e5e2e4f85722a",
+      "source": "qasmbench",
+      "source_member": "three QEC benchmark directories plus root metadata",
+      "teaching_role": "QEC circuit, parity-check, syndrome-register, and correction parsing"
+    },
+    {
+      "bytes": 358017,
+      "mandatory": true,
+      "path": "raw/source=qec_syndromes/syndromes_dataset.zip",
+      "sha256": "bdfce36a71f04295ac78fb372d9c2e381801c05e3be119f919750ef59026d072",
+      "source": "qec_syndromes",
+      "source_member": null,
+      "teaching_role": "Mandatory syndrome cleaning, nested-sequence normalization, and weighted aggregation"
+    },
+    {
+      "bytes": 14638673,
+      "mandatory": true,
+      "path": "raw/source=google_qec/google-surface-code-curated.zip",
+      "sha256": "5d6a24f89f055883a49910979490be4baef54d28bf9a0f8e096a1d6c46d1ea56",
+      "source": "google_qec",
+      "source_member": "five X-basis, 25-round surface-code experiments",
+      "teaching_role": "Mandatory real-hardware parity measurements, detector events, logical outcomes, and decoder predictions"
+    }
+  ],
+  "release_date": "2026-08-05",
+  "release_name": "quantum-data-core"
+}

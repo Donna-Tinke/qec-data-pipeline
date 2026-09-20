@@ -1,0 +1,11 @@
+.env
+.git
+**/.DS_Store
+**/__pycache__
+**/.pytest_cache
+**/.venv
+datasets/raw
+datasets/student-bundle
+starter/lake
+starter/reports
+
