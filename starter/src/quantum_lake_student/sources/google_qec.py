@@ -1,20 +1,28 @@
-"""google_qec source: companion-file checks, properties parsing, Silver rows.
+"""Our Silver pipeline for the google_qec source.
 
-Whole-archive hash verification lives in stages/register_sources.py, not here.
+Checks the raw files, decodes them, and writes the two required Silver
+tables (experiment.parquet, shot.parquet). Checking the overall zip hash is
+someone else's job (stages/register_sources.py) - not this file.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import yaml
 
+from quantum_lake_student.archives import extract_archive
+from quantum_lake_student.config import Settings
 from quantum_lake_student.formats import b8_record_bytes, iter_b8_records, parse_01_records
-from quantum_lake_student.models import QualityFinding, Severity
+from quantum_lake_student.models import QualityFinding, Severity, StageResult, stable_record_hash
+from quantum_lake_student.results import replace_source_rows
 
 SOURCE_NAME = "google_qec"
 
@@ -39,6 +47,59 @@ REQUIRED_FILES: tuple[str, ...] = (
     "detection_events.b8",
     "obs_flips_actual.01",
     *DECODER_PREDICTION_COLUMNS.values(),
+)
+
+EXPERIMENT_SCHEMA = pa.schema(
+    [
+        ("source_record_id", pa.string()),
+        ("experiment_id", pa.string()),
+        ("basis", pa.string()),
+        ("distance", pa.int32()),
+        ("rounds", pa.int32()),
+        ("shots", pa.int64()),
+        ("center_row", pa.int32()),
+        ("center_col", pa.int32()),
+        ("measurement_count", pa.int32()),
+        ("detector_count", pa.int32()),
+    ]
+)
+
+SHOT_SCHEMA = pa.schema(
+    [
+        ("source_record_id", pa.string()),
+        ("experiment_id", pa.string()),
+        ("shot_index", pa.int64()),
+        ("measurement_bits", pa.binary()),
+        ("sweep_bits", pa.binary()),
+        ("detector_bits", pa.binary()),
+        ("detector_event_count", pa.int32()),
+        ("actual_observable_flip", pa.bool_()),
+        *[(column, pa.bool_()) for column in DECODER_PREDICTION_COLUMNS],
+    ]
+)
+
+TRACE_SCHEMA = pa.schema(
+    [
+        ("source_record_id", pa.string()),
+        ("source_name", pa.string()),
+        ("bronze_object", pa.string()),
+        ("archive_member", pa.string()),
+        ("record_locator", pa.string()),
+        ("input_sha256", pa.string()),
+    ]
+)
+
+ISSUE_SCHEMA = pa.schema(
+    [
+        ("issue_id", pa.string()),
+        ("run_id", pa.string()),
+        ("source_record_id", pa.string()),
+        ("rule_id", pa.string()),
+        ("severity", pa.string()),
+        ("observed_value", pa.string()),
+        ("action", pa.string()),
+        ("reason", pa.string()),
+    ]
 )
 
 _PROPERTIES_REQUIRED_KEYS = {
@@ -318,7 +379,7 @@ class ProcessedExperiment:
 def process_experiment_dir(
     experiment_dir: Path, *, bronze_object: str, input_sha256: str
 ) -> ProcessedExperiment:
-    # any failed check below rejects the whole experiment, not just one shot
+    # if any check below fails we skip the whole experiment, not just one shot
     findings = verify_companion_files(experiment_dir)
     if findings:
         return ProcessedExperiment(None, [], [], findings)
@@ -415,15 +476,14 @@ def process_experiment_dir(
 
 
 def build_silver_tables(
-    archive_root: Path, *, bronze_object: str
+    root: Path, *, bronze_object: str, input_sha256: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[QualityFinding]]:
-    input_sha256 = sha256_file(archive_root) if archive_root.is_file() else ""
+    # root must already be extracted (see run() below, uses archives.extract_archive)
     experiment_rows: list[dict[str, Any]] = []
     shot_rows: list[dict[str, Any]] = []
     trace_rows: list[dict[str, Any]] = []
     findings: list[QualityFinding] = []
 
-    root = archive_root if archive_root.is_dir() else archive_root.parent
     for experiment_dir in iter_experiment_dirs(root):
         if not (experiment_dir / "properties.yml").exists():
             continue
@@ -437,3 +497,88 @@ def build_silver_tables(
             trace_rows.extend(processed.trace_rows)
 
     return experiment_rows, shot_rows, trace_rows, findings
+
+
+def write_table(rows: list[dict[str, Any]], schema: pa.Schema, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.Table.from_pylist(rows, schema=schema), path)
+
+
+def quality_finding_to_issue_row(finding: QualityFinding, run_id: str) -> dict[str, Any]:
+    issue_id = stable_record_hash(
+        {
+            "run_id": run_id,
+            "rule_id": finding.rule_id,
+            "source_record_locator": finding.source_record_locator,
+        }
+    )
+    return {
+        "issue_id": issue_id,
+        "run_id": run_id,
+        "source_record_id": None,
+        "rule_id": finding.rule_id,
+        "severity": finding.severity.value,
+        "observed_value": finding.observed_value,
+        "action": "rejected",
+        "reason": finding.message,
+    }
+
+
+def _locate_bronze_zip(settings: Settings) -> Path:
+    for area in ("bronze", "raw"):
+        candidate = (
+            settings.local_lake_root
+            / area
+            / f"source={SOURCE_NAME}"
+            / "google-surface-code-curated.zip"
+        )
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(
+        f"Could not find the {SOURCE_NAME} Bronze archive under {settings.local_lake_root}"
+    )
+
+
+def run(run_id: str) -> StageResult:
+    settings = Settings.from_environment()
+    result = StageResult(stage=f"silver.{SOURCE_NAME}", run_id=run_id)
+
+    zip_path = _locate_bronze_zip(settings)
+    input_sha256 = sha256_file(zip_path)
+    bronze_object = zip_path.relative_to(settings.local_lake_root).as_posix()
+
+    scratch_dir = settings.local_lake_root / "_scratch" / SOURCE_NAME
+    if scratch_dir.exists():
+        shutil.rmtree(scratch_dir)
+    extract_archive(zip_path, scratch_dir)
+    try:
+        experiment_rows, shot_rows, trace_rows, findings = build_silver_tables(
+            scratch_dir, bronze_object=bronze_object, input_sha256=input_sha256
+        )
+    finally:
+        shutil.rmtree(scratch_dir)
+
+    silver_dir = settings.local_lake_root / "silver" / SOURCE_NAME
+    write_table(experiment_rows, EXPERIMENT_SCHEMA, silver_dir / "experiment.parquet")
+    write_table(shot_rows, SHOT_SCHEMA, silver_dir / "shot.parquet")
+
+    issue_rows = [quality_finding_to_issue_row(finding, run_id) for finding in findings]
+    results_dir = settings.local_lake_root / "results" / "part1"
+    replace_source_rows(
+        results_dir / "source_trace.parquet",
+        trace_rows,
+        TRACE_SCHEMA,
+        is_same_source=lambda row: row["source_name"] == SOURCE_NAME,
+    )
+    replace_source_rows(
+        results_dir / "data_issues.parquet",
+        issue_rows,
+        ISSUE_SCHEMA,
+        is_same_source=lambda row: str(row["rule_id"]).startswith(f"{SOURCE_NAME}."),
+    )
+
+    result.input_count = len(experiment_rows)
+    result.output_count = len(shot_rows)
+    result.issue_count = len(issue_rows)
+    result.finish()
+    return result

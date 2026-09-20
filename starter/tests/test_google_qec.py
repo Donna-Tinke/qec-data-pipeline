@@ -1,8 +1,11 @@
+import zipfile
 from pathlib import Path
 
+import pyarrow.parquet as pq
 import pytest
 
 from quantum_lake_student.sources import google_qec
+
 
 def _properties_yml(center_row: int, center_col: int) -> str:
     return f"""\
@@ -133,7 +136,7 @@ def test_build_silver_tables_over_directory_root(tmp_path: Path) -> None:
     _write_experiment(tmp_path, name="surface_code_bX_d3_r2_center_9_9", center_row=9, center_col=9)
 
     experiment_rows, shot_rows, trace_rows, findings = google_qec.build_silver_tables(
-        tmp_path, bronze_object="bronze_object"
+        tmp_path, bronze_object="bronze_object", input_sha256="hash"
     )
 
     assert findings == []
@@ -143,3 +146,74 @@ def test_build_silver_tables_over_directory_root(tmp_path: Path) -> None:
         "surface_code_bX_d3_r2_center_1_2",
         "surface_code_bX_d3_r2_center_9_9",
     }
+
+
+def test_write_table_roundtrips_rows(tmp_path: Path) -> None:
+    experiment_dir = _write_experiment(tmp_path)
+    processed = google_qec.process_experiment_dir(
+        experiment_dir, bronze_object="bronze_object", input_sha256="hash"
+    )
+
+    path = tmp_path / "out" / "experiment.parquet"
+    google_qec.write_table([processed.experiment_row], google_qec.EXPERIMENT_SCHEMA, path)
+
+    assert pq.read_table(path).to_pylist() == [processed.experiment_row]
+
+
+def test_quality_finding_to_issue_row_is_stable_across_runs() -> None:
+    finding = google_qec.QualityFinding(
+        rule_id="google_qec.missing_companion_file",
+        severity=google_qec.Severity.ERROR,
+        source_system="google_qec",
+        source_record_locator="experiment_1/sweep.b8",
+        message="Required companion file is missing",
+    )
+
+    first = google_qec.quality_finding_to_issue_row(finding, run_id="run-1")
+    second = google_qec.quality_finding_to_issue_row(finding, run_id="run-1")
+
+    assert first == second
+    assert first["rule_id"] == "google_qec.missing_companion_file"
+    assert first["action"] == "rejected"
+    assert first["reason"] == "Required companion file is missing"
+
+
+def _zip_experiment_tree(source_dir: Path, zip_path: Path) -> None:
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        for path in sorted(source_dir.rglob("*")):
+            if path.is_file():
+                archive.write(path, arcname=path.relative_to(source_dir).as_posix())
+
+
+def test_run_end_to_end_writes_silver_and_results(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    _write_experiment(staging, name="surface_code_bX_d3_r2_center_1_2", center_row=1, center_col=2)
+    _write_experiment(staging, name="surface_code_bX_d3_r2_center_9_9", center_row=9, center_col=9)
+
+    lake_root = tmp_path / "lake"
+    zip_path = lake_root / "bronze" / "source=google_qec" / "google-surface-code-curated.zip"
+    zip_path.parent.mkdir(parents=True)
+    _zip_experiment_tree(staging, zip_path)
+
+    monkeypatch.setenv("LAKE_BACKEND", "local")
+    monkeypatch.setenv("LOCAL_LAKE_ROOT", str(lake_root))
+
+    result = google_qec.run("run-1")
+
+    assert result.output_count == 6  # 2 experiments x 3 shots
+    assert result.issue_count == 0
+
+    experiment_table = pq.read_table(lake_root / "silver" / "google_qec" / "experiment.parquet")
+    shot_table = pq.read_table(lake_root / "silver" / "google_qec" / "shot.parquet")
+    assert experiment_table.num_rows == 2
+    assert shot_table.num_rows == 6
+
+    trace_table = pq.read_table(lake_root / "results" / "part1" / "source_trace.parquet")
+    assert trace_table.num_rows > 0
+    assert not (lake_root / "_scratch" / "google_qec").exists()
+
+    # rerun on unchanged input must not duplicate rows
+    google_qec.run("run-2")
+    trace_table_after = pq.read_table(lake_root / "results" / "part1" / "source_trace.parquet")
+    assert trace_table_after.num_rows == trace_table.num_rows
