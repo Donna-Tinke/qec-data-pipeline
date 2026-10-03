@@ -500,6 +500,7 @@ def write_result_table(
 def run_qasmbench_pipeline(
     settings: Settings,
     run_id: str = "default_run",
+    results_dir: Path | str = "results/part1",
 ) -> dict[str, Any]:
     """Execute the full QASMBench ingestion, validation, and publishing pipeline."""
     archive_path = "bronze/source=qasmbench/qasmbench-qec.zip"
@@ -595,11 +596,13 @@ def run_qasmbench_pipeline(
         settings,
     )
 
-    # Write Results tables to results/part1/
+    results_path = Path(results_dir)
+
+    # Write Results tables to results/part1/ (or injected results_dir)
     source_trace_loc = write_result_table(
         new_rows=unique_source_records,
         schema=SOURCE_TRACE_SCHEMA,
-        relative_path="results/part1/source_trace.parquet",
+        relative_path=str(results_path / "source_trace.parquet"),
         settings=settings,
         is_same_source=is_same_source_trace,
     )
@@ -607,7 +610,7 @@ def run_qasmbench_pipeline(
     data_issues_loc = write_result_table(
         new_rows=issue_records,
         schema=DATA_ISSUES_SCHEMA,
-        relative_path="results/part1/data_issues.parquet",
+        relative_path=str(results_path / "data_issues.parquet"),
         settings=settings,
         is_same_source=is_same_data_issue,
     )
@@ -632,13 +635,17 @@ def run_qasmbench_pipeline(
     }
 
 
-def run(run_id: str, settings: Settings | None = None) -> StageResult:
+def run(
+    run_id: str,
+    settings: Settings | None = None,
+    results_dir: Path | str = "results/part1",
+) -> StageResult:
     """Execute the QASMBench data preparation stage."""
     if settings is None:
         settings = Settings.from_environment()
 
     result = StageResult(stage="silver.qasmbench", run_id=run_id)
-    summary = run_qasmbench_pipeline(settings, run_id=run_id)
+    summary = run_qasmbench_pipeline(settings, run_id=run_id, results_dir=results_dir)
 
     result.input_count = summary["input_count"]
     result.output_count = summary["output_count"]

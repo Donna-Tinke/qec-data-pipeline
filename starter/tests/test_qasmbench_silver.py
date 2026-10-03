@@ -1,11 +1,13 @@
+import os
 from pathlib import Path
+import shutil
 import pytest
 import pyarrow.parquet as pq
 
 from quantum_lake_student.config import Settings
 from quantum_lake_student.models import Severity
-from quantum_lake_student.sources import qasmbench
-from quantum_lake_student.sources.qasmbench import (
+from quantum_lake_student.sources import qasmbench_silver
+from quantum_lake_student.sources.qasmbench_silver import (
     CIRCUIT_SCHEMA,
     CONDITIONAL_SCHEMA,
     DATA_ISSUES_SCHEMA,
@@ -16,6 +18,45 @@ from quantum_lake_student.sources.qasmbench import (
     parse_qasm,
     read_lake_table
 )
+
+# ---------------------------------------------------------------------------
+# TOGGLE: Set USE_TEMP_STORAGE = False (or run with USE_TEMP_STORAGE=0)
+# to write to live MinIO and the real results/part1/ directory.
+# Defaults to True (isolated, test mode in tmp_path).
+# ---------------------------------------------------------------------------
+USE_TEMP_STORAGE = os.getenv("USE_TEMP_STORAGE", "1").lower() in ("1", "true", "yes")
+
+REAL_ARCHIVE_CANDIDATES = [
+    Path("/course-data/raw/source=qasmbench/qasmbench-qec.zip"),
+    Path(__file__).resolve().parents[2]
+    / "datasets/student-bundle/core/raw/source=qasmbench/qasmbench-qec.zip",
+]
+
+
+@pytest.fixture(autouse=True)
+def setup_test_lake(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    if not USE_TEMP_STORAGE:
+        # Live mode: do nothing, let Settings connect to real MinIO in Docker
+        return
+
+    # Local mode: redirect lake to tmp_path
+    monkeypatch.setenv("LAKE_BACKEND", "local")
+    monkeypatch.setenv("LOCAL_LAKE_ROOT", str(tmp_path))
+
+    source = next((p for p in REAL_ARCHIVE_CANDIDATES if p.exists()), None)
+    if source is not None:
+        target = tmp_path / "bronze/source=qasmbench/qasmbench-qec.zip"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(source, target)
+
+
+@pytest.fixture
+def target_results_dir(tmp_path: Path) -> Path:
+    if not USE_TEMP_STORAGE:
+        p = Path("results/part1")
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    return tmp_path
 
 
 def test_parse_valid_qasm() -> None:
@@ -67,9 +108,9 @@ def test_parse_error_records_issue() -> None:
     assert any(f.rule_id == RULE_PARSE_ERROR for f in findings)
 
 
-def test_qasmbench_stage_execution() -> None:
+def test_qasmbench_stage_execution(target_results_dir: Path) -> None:
     settings = Settings.from_environment()
-    res = qasmbench.run("test-integration-run", settings=settings)
+    res = qasmbench_silver.run("test-integration-run", settings=settings, results_dir=target_results_dir)
 
     assert res.stage == "silver.qasmbench"
     assert res.run_id == "test-integration-run"
@@ -84,9 +125,9 @@ def test_qasmbench_stage_execution() -> None:
     stab_table = read_lake_table("silver/qasmbench/stabilizer_check.parquet", settings)
     cond_table = read_lake_table("silver/qasmbench/conditional_correction.parquet", settings)
 
-    # Check that result tables were written to results/part1/
-    trace_p = Path("results/part1/source_trace.parquet")
-    issues_p = Path("results/part1/data_issues.parquet")
+    # Check that result tables were written to target_results_dir
+    trace_p = target_results_dir / "source_trace.parquet"
+    issues_p = target_results_dir / "data_issues.parquet"
 
     assert trace_p.exists()
     assert issues_p.exists()
@@ -123,19 +164,19 @@ def test_qasmbench_stage_execution() -> None:
     assert res.input_count == circuit_table.num_rows + len(qasm_issue_rows)
 
 
-def test_safe_repeated_runs_idempotence() -> None:
+def test_safe_repeated_runs_idempotence(target_results_dir: Path) -> None:
     settings = Settings.from_environment()
-    run1 = qasmbench.run("run-1", settings=settings)
+    run1 = qasmbench_silver.run("run-1", settings=settings, results_dir=target_results_dir)
     circuit_t1 = read_lake_table("silver/qasmbench/circuit.parquet", settings)
     stab_t1 = read_lake_table("silver/qasmbench/stabilizer_check.parquet", settings)
     cond_t1 = read_lake_table("silver/qasmbench/conditional_correction.parquet", settings)
-    trace_t1 = pq.read_table("results/part1/source_trace.parquet")
+    trace_t1 = pq.read_table(target_results_dir / "source_trace.parquet")
 
-    run2 = qasmbench.run("run-2", settings=settings)
+    run2 = qasmbench_silver.run("run-2", settings=settings, results_dir=target_results_dir)
     circuit_t2 = read_lake_table("silver/qasmbench/circuit.parquet", settings)
     stab_t2 = read_lake_table("silver/qasmbench/stabilizer_check.parquet", settings)
     cond_t2 = read_lake_table("silver/qasmbench/conditional_correction.parquet", settings)
-    trace_t2 = pq.read_table("results/part1/source_trace.parquet")
+    trace_t2 = pq.read_table(target_results_dir / "source_trace.parquet")
 
     # Verify all tables are identical across repeated runs (no duplicates, stable IDs)
     assert circuit_t1.equals(circuit_t2)
