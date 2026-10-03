@@ -129,6 +129,15 @@ class ExperimentProperties:
     detector_count: int
 
 
+def pack_bits(bits: tuple[int, ...]) -> bytes:
+    """Re-pack unpacked bits into a Stim b8 record (little-endian in each byte)."""
+    packed = bytearray((len(bits) + 7) // 8)
+    for index, bit in enumerate(bits):
+        if bit:
+            packed[index // 8] |= 1 << (index % 8)
+    return bytes(packed)
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -451,9 +460,11 @@ def process_experiment_dir(
                 "source_record_id": source_record_id,
                 "experiment_id": properties.experiment_id,
                 "shot_index": shot_index,
-                "measurement_bits": bytes(measurement_rows[shot_index]),
-                "sweep_bits": bytes(sweep_rows[shot_index]),
-                "detector_bits": bytes(detector_bits),
+                "measurement_bits": pack_bits(measurement_rows[shot_index]),
+                "sweep_bits": (
+                    pack_bits(sweep_rows[shot_index]) if properties.sweep_bit_count else b""
+                ),
+                "detector_bits": pack_bits(detector_bits),
                 "detector_event_count": sum(detector_bits),
                 "actual_observable_flip": bool(actual_flips[shot_index]),
                 **{
