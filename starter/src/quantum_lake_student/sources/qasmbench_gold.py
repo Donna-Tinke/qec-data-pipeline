@@ -12,6 +12,7 @@ import psycopg
 
 from quantum_lake_student.config import Settings
 from quantum_lake_student.connections import postgres_connection
+from quantum_lake_student.models import StageResult
 from quantum_lake_student.sources.qasmbench_silver import read_lake_table
 
 
@@ -236,10 +237,17 @@ def load_qasmbench_gold(
     return counts
 
 
-def run_gold_load(settings: Settings | None = None) -> dict[str, int]:
-    """Convenience entry point to open connection and execute Gold load."""
+def run(run_id: str, settings: Settings | None = None) -> StageResult:
+    """Execute QASMBench Gold schema initialization and loading as a pipeline stage."""
     if settings is None:
         settings = Settings.from_environment()
 
+    result = StageResult(stage="gold.qasmbench", run_id=run_id)
+
     with postgres_connection(settings) as conn:
-        return load_qasmbench_gold(conn, settings)
+        counts = load_qasmbench_gold(conn, settings=settings)
+        result.input_count = counts.get("circuit", 0)
+        result.output_count = sum(counts.values())
+        result.finish()
+
+    return result

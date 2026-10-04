@@ -10,6 +10,10 @@ import csv
 from pathlib import Path
 import psycopg
 
+from quantum_lake_student.config import Settings
+from quantum_lake_student.connections import postgres_connection
+from quantum_lake_student.models import StageResult
+
 
 # =============================================================================
 # Part I Analysis — Question 3: Repetition Code Mapping
@@ -119,3 +123,30 @@ def run_question_3_analysis(
                 writer.writerows(agg_rows)
 
     return csv_path
+
+
+def run(
+    run_id: str,
+    settings: Settings | None = None,
+    output_dir: Path | str | None = None,
+    write_aggregated: bool = True,
+) -> StageResult:
+    """Execute Part I Question 3 analysis as a pipeline stage."""
+    if settings is None:
+        settings = Settings.from_environment()
+
+    result = StageResult(stage="analysis.qasmbench", run_id=run_id)
+
+    if output_dir is not None:
+        out_path = Path(output_dir)
+    else:
+        out_path = Path("results/part1/analysis")
+
+    with postgres_connection(settings) as conn:
+        run_question_3_analysis(conn, output_dir=out_path, write_aggregated=write_aggregated)
+        result.input_count = 1  # Target repetition code circuit analyzed ('qec_sm_n5')
+        result.output_count = 2 if write_aggregated else 1  # Output CSV reports produced
+        result.finish()
+
+    return result
+
