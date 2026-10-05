@@ -1,6 +1,8 @@
 import hashlib
 import io
+import json
 import zipfile
+from pathlib import Path
 
 import psycopg
 import pyarrow as pa
@@ -265,3 +267,34 @@ def test_export_detects_rows_lost_in_view(pg, monkeypatch) -> None:
     monkeypatch.setattr(gold, "_count", lambda connection, table: 999)
     with pytest.raises(ContractError, match="999"):
         gold.export_ml_examples(pg)
+
+
+# --- analysis and trace --------------------------------------------------------
+
+
+def test_analysis_sql_is_packaged() -> None:
+    assert sorted(path.name for path in (gold.SQL_DIR / "analysis").glob("*.sql")) == [
+        "q1_syndrome_by_fault_rate.sql",
+        "q1_syndrome_by_fired_count.sql",
+    ]
+
+
+def test_analysis_and_trace(pg, tmp_path: Path) -> None:
+    load_into_test_schema(pg, silver_table(SMALL_FILES))
+    use_test_schema(pg)
+
+    counts = gold.run_analyses(pg, tmp_path / "analysis")
+    assert counts["q1_syndrome_by_fault_rate"] == 3
+    by_rate = (tmp_path / "analysis/q1_syndrome_by_fault_rate.csv").read_text().splitlines()
+    assert by_rate[0].startswith('"physical_fault_rate"')
+    # 0.0005 has no pattern with both labels: the share must be 0, not an empty (NULL) field
+    for name in counts:
+        for line in (tmp_path / f"analysis/{name}.csv").read_text().splitlines():
+            assert ",," not in line and not line.endswith(","), f"{name}: empty value in {line!r}"
+
+    gold.write_trace_example(gold.trace_example(pg, tmp_path), tmp_path)
+    trace = json.loads((tmp_path / "trace_examples.json").read_text())["qec_syndromes"]
+    # heaviest test-split example with a logical error: ONE_BIT, label 1, quantity 6
+    assert trace["ml"]["data_split"] == "test"
+    assert trace["ml"]["sample_weight"] == 6
+    assert trace["gold"]["syndrome_observation"]["source_record_id"] == trace["silver"]["source_record_id"]

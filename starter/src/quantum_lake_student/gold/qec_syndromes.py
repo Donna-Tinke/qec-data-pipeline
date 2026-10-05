@@ -12,6 +12,7 @@ the whole load back, so the previous Gold version stays in place.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from math import isclose
 from pathlib import Path
@@ -19,6 +20,8 @@ from typing import Any
 
 import psycopg
 import pyarrow as pa
+import pyarrow.csv as pacsv
+import pyarrow.parquet as pq
 from psycopg import sql
 
 from quantum_lake_student.config import Settings
@@ -282,3 +285,94 @@ def export_ml_examples(connection: psycopg.Connection) -> pa.Table:
     if problems:
         raise ContractError("ml_syndrome_decoder_example: " + "; ".join(problems))
     return table
+
+
+# ---------------------------------------------------------------- analysis and tracing
+
+
+def run_analyses(connection: psycopg.Connection, analysis_dir: Path) -> dict[str, int]:
+    """Run the Q1 queries against Gold and save each result as CSV."""
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    row_counts = {}
+    for sql_path in sorted((SQL_DIR / "analysis").glob("*.sql")):
+        with connection.cursor() as cursor:
+            cursor.execute(sql_path.read_text(encoding="utf-8"))
+            names = [column.name for column in cursor.description]
+            rows = cursor.fetchall()
+        table = pa.Table.from_pylist([dict(zip(names, row)) for row in rows])
+        pacsv.write_csv(table, analysis_dir / f"{sql_path.stem}.csv")
+        row_counts[sql_path.stem] = table.num_rows
+    return row_counts
+
+
+def trace_example(connection: psycopg.Connection, results_dir: Path) -> dict[str, Any]:
+    """Follow one ML example back through Gold and Silver to its Bronze CSV line.
+
+    Picks the heaviest test-split example with a logical error, so the choice
+    is repeatable. Part II predictions keep example_id, which closes the chain.
+    """
+    test_rate = 0.005  # syndrome_data_split sends this fault rate to "test"
+    row = connection.execute(
+        "SELECT o.observation_id, o.experiment_id, o.syndrome_id, o.logical_error_label, "
+        "       o.quantity, o.source_record_id, encode(p.syndrome_bits, 'hex'), p.fired_count, "
+        "       s.physical_fault_rate, s.nominal_shot_count "
+        "FROM syndrome_observation o "
+        "JOIN syndrome_pattern p USING (syndrome_id) "
+        "JOIN simulated_experiment s USING (experiment_id) "
+        "WHERE o.logical_error_label AND abs(s.physical_fault_rate - %s) < 1e-12 "
+        "ORDER BY o.quantity DESC, o.observation_id LIMIT 1",
+        (test_rate,),
+    ).fetchone()
+    if row is None:
+        raise ContractError("no test-split syndrome example with a logical error to trace")
+    (observation_id, experiment_id, syndrome_id, label, quantity, source_record_id,
+     bits_hex, fired_count, fault_rate, nominal) = row
+
+    trace_path = results_dir / "source_trace.parquet"
+    bronze_rows = []
+    if trace_path.exists():
+        bronze_rows = [
+            r for r in pq.read_table(trace_path).to_pylist() if r["source_record_id"] == source_record_id
+        ]
+
+    return {
+        "ml": {
+            "table": ML_OBJECT,
+            "example_id": observation_id,
+            "data_split": syndrome_data_split(fault_rate),
+            "logical_error_label": label,
+            "sample_weight": quantity,
+        },
+        "gold": {
+            "syndrome_observation": {
+                "observation_id": observation_id,
+                "experiment_id": experiment_id,
+                "syndrome_id": syndrome_id,
+                "logical_error_label": label,
+                "quantity": quantity,
+                "source_record_id": source_record_id,
+            },
+            "syndrome_pattern": {
+                "syndrome_id": syndrome_id,
+                "syndrome_bits_hex": bits_hex,
+                "fired_count": fired_count,
+            },
+            "simulated_experiment": {
+                "experiment_id": experiment_id,
+                "physical_fault_rate": fault_rate,
+                "nominal_shot_count": nominal,
+            },
+        },
+        "silver": {"table": silver.SILVER_OBJECT, "source_record_id": source_record_id},
+        "bronze": bronze_rows,
+        "prediction": "results/part2/predictions.parquet rows with this example_id",
+    }
+
+
+def write_trace_example(trace: dict[str, Any], results_dir: Path) -> None:
+    """Store our trace under its own key so teammates' traces in the same file survive."""
+    path = results_dir / "trace_examples.json"
+    existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    existing[SOURCE_NAME] = trace
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(existing, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")

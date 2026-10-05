@@ -40,6 +40,8 @@ def run(
     with postgres_connection(settings) as connection:
         use_gold(connection)
         syndrome_examples = qec_syndromes.export_ml_examples(connection)
+        qec_syndromes.run_analyses(connection, results_dir / "analysis")
+        qec_syndromes.write_trace_example(qec_syndromes.trace_example(connection, results_dir), results_dir)
 
     write_parquet(syndrome_examples, qec_syndromes.ML_OBJECT, settings)
 
