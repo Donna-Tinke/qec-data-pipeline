@@ -1,3 +1,4 @@
+import hashlib
 import io
 import zipfile
 
@@ -7,7 +8,7 @@ import pytest
 
 from quantum_lake_student.config import Settings
 from quantum_lake_student.gold import qec_syndromes as gold
-from quantum_lake_student.gold.qec_syndromes import GoldLoadError
+from quantum_lake_student.gold.qec_syndromes import ContractError, GoldLoadError
 from quantum_lake_student.sources.qec_syndromes import SYNDROME_OBSERVATION_SCHEMA, build_silver_rows
 
 ZERO = '"((0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0))"'
@@ -188,3 +189,79 @@ def test_constraints_reject_bad_rows(pg, statement: str, error: type[Exception])
     with pytest.raises(error):
         with pg.transaction():
             pg.execute(statement)
+
+
+# --- Gold -> ML ----------------------------------------------------------------
+
+
+def expected_example_id(experiment_id: str, bits: bytes, label: bool) -> str:
+    text = f"{experiment_id}|{bits.hex()}|{'1' if label else '0'}"
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def ml_table(rows: list[dict]) -> pa.Table:
+    return pa.Table.from_pylist(rows, schema=gold.ML_SCHEMA)
+
+
+def ml_row(example_id: str, fault_rate: float, split: str, bits: bytes = bytes(16)) -> dict:
+    return {
+        "example_id": example_id,
+        "experiment_id": "e",
+        "physical_fault_rate": fault_rate,
+        "syndrome_bits": bits,
+        "round_count": 4,
+        "check_count": 4,
+        "logical_error_label": False,
+        "sample_weight": 1,
+        "data_split": split,
+    }
+
+
+VALID_ROWS = [ml_row("a", 0.001, "train"), ml_row("b", 0.0005, "validation"), ml_row("c", 0.005, "test")]
+
+
+def test_contract_accepts_valid_table() -> None:
+    assert gold.contract_problems(ml_table(VALID_ROWS)) == []
+
+
+@pytest.mark.parametrize(
+    ("change", "problem"),
+    [
+        (lambda rows: rows.append(ml_row("a", 0.001, "train")), "not unique"),
+        (lambda rows: rows.pop(2), "empty splits"),
+        (lambda rows: rows[0].update(syndrome_bits=bytes(15)), "16 binary values"),
+        (lambda rows: rows[0].update(syndrome_bits=b"\x02" + bytes(15)), "16 binary values"),
+        (lambda rows: rows[0].update(round_count=5), "not 4x4"),
+        (lambda rows: rows[0].update(sample_weight=0), "positive"),
+        (lambda rows: rows[0].update(data_split="test"), "course split"),
+    ],
+)
+def test_contract_reports_problems(change, problem: str) -> None:
+    rows = [dict(row) for row in VALID_ROWS]
+    change(rows)
+    assert any(problem in message for message in gold.contract_problems(ml_table(rows)))
+
+
+def test_ml_export_meets_contract_and_resolves_to_gold(pg) -> None:
+    load_into_test_schema(pg, silver_table(SMALL_FILES))
+    use_test_schema(pg)
+    table = gold.export_ml_examples(pg)
+
+    assert table.num_rows == 7
+    assert set(table.column("data_split").to_pylist()) == {"train", "validation", "test"}
+    for row in table.to_pylist():
+        assert row["example_id"] == expected_example_id(
+            row["experiment_id"], row["syndrome_bits"], row["logical_error_label"]
+        )
+        resolved = pg.execute(
+            "SELECT source_record_id FROM syndrome_observation WHERE observation_id = %s", (row["example_id"],)
+        ).fetchone()
+        assert resolved is not None and resolved[0].startswith("qec_syndromes:")
+
+
+def test_export_detects_rows_lost_in_view(pg, monkeypatch) -> None:
+    load_into_test_schema(pg, silver_table(SMALL_FILES))
+    use_test_schema(pg)
+    monkeypatch.setattr(gold, "_count", lambda connection, table: 999)
+    with pytest.raises(ContractError, match="999"):
+        gold.export_ml_examples(pg)

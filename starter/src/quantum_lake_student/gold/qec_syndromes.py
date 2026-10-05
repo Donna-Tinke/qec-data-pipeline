@@ -1,4 +1,4 @@
-"""Gold load for the qec_syndromes source.
+"""Gold load and Gold-to-ML export for the qec_syndromes source.
 
 Gold tables (sql/qec_syndromes/01_schema.sql):
   simulated_experiment  one row per fault-rate file          (7)
@@ -22,19 +22,40 @@ import pyarrow as pa
 from psycopg import sql
 
 from quantum_lake_student.config import Settings
+from quantum_lake_student.ml import MODEL_SPLITS, syndrome_data_split, syndrome_model_input
 from quantum_lake_student.sources import qec_syndromes as silver
 
 SOURCE_NAME = silver.SOURCE_NAME
 GOLD_SCHEMA = "gold"
 SQL_DIR = Path(__file__).parent / "sql" / SOURCE_NAME
+ML_OBJECT = "ml/ml_syndrome_decoder_example.parquet"
 
 
 class GoldLoadError(RuntimeError):
     """A Silver-to-Gold check failed; the load transaction was rolled back."""
 
 
+class ContractError(ValueError):
+    """The exported ML table does not match its required contract."""
+
+
 def _sql(name: str) -> str:
     return (SQL_DIR / name).read_text(encoding="utf-8")
+
+
+ML_SCHEMA = pa.schema(
+    [
+        ("example_id", pa.string()),
+        ("experiment_id", pa.string()),
+        ("physical_fault_rate", pa.float64()),
+        ("syndrome_bits", pa.binary()),
+        ("round_count", pa.int32()),
+        ("check_count", pa.int32()),
+        ("logical_error_label", pa.bool_()),
+        ("sample_weight", pa.int64()),
+        ("data_split", pa.string()),
+    ]
+)
 
 
 # ---------------------------------------------------------------- Gold load
@@ -193,3 +214,71 @@ def _count(connection: psycopg.Connection, table: str) -> int:
 
 def load_from_lake(connection: psycopg.Connection, settings: Settings) -> dict[str, int]:
     return load_gold(connection, silver.read_silver_table(settings))
+
+
+# ---------------------------------------------------------------- Gold -> ML
+
+
+def fetch_ml_examples(connection: psycopg.Connection) -> pa.Table:
+    """Read ml_syndrome_decoder_example from the Gold view; only data_split is added here."""
+    rows = connection.execute(
+        "SELECT example_id, experiment_id, physical_fault_rate, syndrome_bits, round_count, "
+        "check_count, logical_error_label, sample_weight "
+        "FROM v_ml_syndrome_decoder_example ORDER BY example_id"
+    ).fetchall()
+    names = ML_SCHEMA.names[:-1]
+    records = [dict(zip(names, row)) for row in rows]
+    for record in records:
+        record["syndrome_bits"] = bytes(record["syndrome_bits"])
+        record["data_split"] = syndrome_data_split(record["physical_fault_rate"])
+
+    table = pa.Table.from_pylist(records, schema=ML_SCHEMA)
+    gold_rows = _count(connection, "syndrome_observation")
+    if table.num_rows != gold_rows:
+        raise ContractError(f"view returned {table.num_rows} rows, Gold has {gold_rows} observations")
+    return table
+
+
+def contract_problems(table: pa.Table) -> list[str]:
+    """Checks from assignment/required-ml-tables.md; empty list = contract met."""
+    if table.schema != ML_SCHEMA:
+        return [f"schema differs from the contract: {table.schema}"]
+    problems = []
+    rows = table.to_pylist()
+
+    example_ids = [row["example_id"] for row in rows]
+    if len(set(example_ids)) != len(example_ids):
+        problems.append("example_id is not unique")
+    if any(value is None for row in rows for value in row.values()):
+        problems.append("null values present")
+    missing_splits = set(MODEL_SPLITS) - {row["data_split"] for row in rows}
+    if missing_splits:
+        problems.append(f"empty splits: {sorted(missing_splits)}")
+
+    for row in rows:
+        prefix = f"example {row['example_id']}"
+        bits = row["syndrome_bits"] or b""
+        try:
+            syndrome_model_input(bits)
+        except ValueError as err:
+            problems.append(f"{prefix}: {err}")
+        if row["round_count"] != silver.ROUND_COUNT or row["check_count"] != silver.CHECK_COUNT:
+            problems.append(f"{prefix}: shape {row['round_count']}x{row['check_count']} is not 4x4")
+        if row["sample_weight"] is None or row["sample_weight"] <= 0:
+            problems.append(f"{prefix}: sample_weight must be positive")
+        if row["physical_fault_rate"] is not None and row["data_split"] != syndrome_data_split(
+            row["physical_fault_rate"]
+        ):
+            problems.append(f"{prefix}: data_split does not match the course split")
+        if len(problems) > 20:
+            problems.append("... more problems omitted")
+            break
+    return problems
+
+
+def export_ml_examples(connection: psycopg.Connection) -> pa.Table:
+    table = fetch_ml_examples(connection)
+    problems = contract_problems(table)
+    if problems:
+        raise ContractError("ml_syndrome_decoder_example: " + "; ".join(problems))
+    return table

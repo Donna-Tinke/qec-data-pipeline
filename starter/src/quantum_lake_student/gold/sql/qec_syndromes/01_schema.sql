@@ -13,6 +13,7 @@
 -- although only ~32k distinct patterns exist. Gold stores each pattern once and
 -- lets observations point at it.
 
+DROP VIEW IF EXISTS v_ml_syndrome_decoder_example;
 DROP TABLE IF EXISTS syndrome_observation, syndrome_pattern, simulated_experiment CASCADE;
 DROP FUNCTION IF EXISTS syndrome_observation_id(text, bytea, boolean);
 
@@ -81,3 +82,22 @@ COMMENT ON TABLE syndrome_observation IS
 -- The PK index serves per-experiment scans; this one serves "same pattern
 -- across fault rates / labels" lookups.
 CREATE INDEX syndrome_observation_syndrome_idx ON syndrome_observation (syndrome_id);
+
+-- Gold -> ML: content of ml_syndrome_decoder_example. One row = one ML example;
+-- data_split is added by the export step with the course helper syndrome_data_split.
+CREATE VIEW v_ml_syndrome_decoder_example AS
+SELECT
+    o.observation_id       AS example_id,
+    o.experiment_id,
+    e.physical_fault_rate,
+    p.syndrome_bits,
+    e.round_count,
+    e.check_count,
+    o.logical_error_label,
+    o.quantity             AS sample_weight
+FROM syndrome_observation o
+JOIN simulated_experiment e USING (experiment_id)
+JOIN syndrome_pattern p USING (syndrome_id);
+
+COMMENT ON VIEW v_ml_syndrome_decoder_example IS
+    'One row = one ML syndrome example; example_id = syndrome_observation.observation_id.';
