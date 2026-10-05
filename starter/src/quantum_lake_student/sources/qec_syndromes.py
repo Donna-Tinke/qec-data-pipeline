@@ -23,10 +23,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from quantum_lake_student.config import Settings
 from quantum_lake_student.connections import minio_client
+from quantum_lake_student.lake import read_parquet, write_parquet
 from quantum_lake_student.models import Severity, StageResult, stable_record_hash
 from quantum_lake_student.results import replace_source_rows
 
@@ -495,37 +495,11 @@ def read_bronze_archive(settings: Settings) -> bytes:
 
 
 def write_silver_table(table: pa.Table, settings: Settings) -> str:
-    buffer = io.BytesIO()
-    pq.write_table(table, buffer, compression="zstd")
-    data = buffer.getvalue()
-
-    if settings.lake_backend == "local":
-        target = settings.local_lake_root / SILVER_OBJECT
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-        return str(target)
-
-    client = minio_client(settings)
-    client.put_object(
-        settings.s3_bucket,
-        SILVER_OBJECT,
-        io.BytesIO(data),
-        len(data),
-        content_type="application/octet-stream",
-    )
-    return f"s3://{settings.s3_bucket}/{SILVER_OBJECT}"
+    return write_parquet(table, SILVER_OBJECT, settings)
 
 
 def read_silver_table(settings: Settings) -> pa.Table:
-    if settings.lake_backend == "local":
-        return pq.read_table(settings.local_lake_root / SILVER_OBJECT)
-    client = minio_client(settings)
-    response = client.get_object(settings.s3_bucket, SILVER_OBJECT)
-    try:
-        return pq.read_table(io.BytesIO(response.read()))
-    finally:
-        response.close()
-        response.release_conn()
+    return read_parquet(SILVER_OBJECT, settings)
 
 
 def run(
