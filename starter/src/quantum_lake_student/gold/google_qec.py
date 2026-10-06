@@ -17,14 +17,42 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from quantum_lake_student.config import Settings
 from quantum_lake_student.connections import minio_client, postgres_connection
+from quantum_lake_student.ml import (
+    MODEL_SPLITS,
+    google_data_split,
+    unpack_little_endian_bits,
+)
 from quantum_lake_student.models import StageResult
 
 SQL_DIR = Path(__file__).parent / "sql" / "google_qec"
+ML_OBJECT = "ml/ml_google_decoder_example.parquet"
 BATCH_ROWS = 10_000
+
+ML_SCHEMA = pa.schema(
+    [
+        ("example_id", pa.string()),
+        ("experiment_id", pa.string()),
+        ("shot_index", pa.int64()),
+        ("distance", pa.int32()),
+        ("rounds", pa.int32()),
+        ("center_row", pa.int32()),
+        ("center_col", pa.int32()),
+        ("detector_count", pa.int32()),
+        ("detector_event_count", pa.int32()),
+        ("detector_bits", pa.binary()),
+        ("belief_matching_prediction", pa.bool_()),
+        ("correlated_matching_prediction", pa.bool_()),
+        ("pymatching_prediction", pa.bool_()),
+        ("tensor_network_contraction_prediction", pa.bool_()),
+        ("actual_observable_flip", pa.bool_()),
+        ("data_split", pa.string()),
+    ]
+)
 
 # (Silver column, PostgreSQL type) in the order of the staging table.
 SHOT_STAGING_COLUMNS: tuple[tuple[str, str], ...] = (
@@ -64,6 +92,10 @@ DECODER_COLUMNS: tuple[tuple[int, str], ...] = (
 
 class GoldLoadError(RuntimeError):
     """A post-load check failed; the transaction was rolled back."""
+
+
+class ContractError(ValueError):
+    """The exported ML table does not match its required contract."""
 
 
 def _sql(name: str) -> str:
@@ -188,6 +220,101 @@ def load_gold(connection: psycopg.Connection, silver: Path) -> dict[str, int]:
                 f"SELECT count(*) FROM gold.{table}"
             ).fetchone()[0]
     return counts
+
+
+# ---------------------------------------------------------------- Gold -> ML
+
+
+def fetch_ml_examples(connection: psycopg.Connection) -> pa.Table:
+    """Read ml_google_decoder_example from the Gold view; only data_split is added here."""
+    rows = connection.execute(
+        """
+        SELECT example_id, experiment_id, shot_index, distance, rounds,
+               center_row, center_col, detector_count, detector_event_count,
+               detector_bits, belief_matching_prediction,
+               correlated_matching_prediction, pymatching_prediction,
+               tensor_network_contraction_prediction, actual_observable_flip
+        FROM gold.v_ml_google_decoder_example
+        ORDER BY experiment_id, shot_index
+        """
+    ).fetchall()
+    names = ML_SCHEMA.names[:-1]
+    records = [dict(zip(names, row)) for row in rows]
+    for record in records:
+        record["detector_bits"] = bytes(record["detector_bits"])
+        record["data_split"] = google_data_split(record["shot_index"])
+
+    table = pa.Table.from_pylist(records, schema=ML_SCHEMA)
+    gold_rows = connection.execute("SELECT count(*) FROM gold.google_shot").fetchone()[0]
+    if table.num_rows != gold_rows:
+        raise ContractError(f"view returned {table.num_rows} rows, Gold has {gold_rows} shots")
+    return table
+
+
+def contract_problems(table: pa.Table) -> list[str]:
+    """Checks from assignment/required-ml-tables.md; empty list = contract met."""
+    if table.schema != ML_SCHEMA:
+        return [f"schema differs from the contract: {table.schema}"]
+    problems = []
+    rows = table.to_pylist()
+
+    example_ids = [row["example_id"] for row in rows]
+    if len(set(example_ids)) != len(example_ids):
+        problems.append("example_id is not unique")
+    if any(value is None for row in rows for value in row.values()):
+        problems.append("null values present")
+    missing_splits = set(MODEL_SPLITS) - {row["data_split"] for row in rows}
+    if missing_splits:
+        problems.append(f"empty splits: {sorted(missing_splits)}")
+
+    prediction_columns = (
+        "belief_matching_prediction",
+        "correlated_matching_prediction",
+        "pymatching_prediction",
+        "tensor_network_contraction_prediction",
+    )
+
+    for row in rows:
+        prefix = f"example {row['example_id']}"
+        detector_count = row["detector_count"]
+        detector_bits = row["detector_bits"] or b""
+        expected_bytes = (detector_count + 7) // 8
+        if len(detector_bits) != expected_bytes:
+            problems.append(f"{prefix}: wrong detector_bits length {len(detector_bits)} != {expected_bytes}")
+        else:
+            remainder = detector_count % 8
+            if remainder != 0 and (detector_bits[-1] >> remainder) != 0:
+                problems.append(f"{prefix}: padding bits are not zero")
+            unpacked = unpack_little_endian_bits(detector_bits, detector_count)
+            if sum(unpacked) != row["detector_event_count"]:
+                problems.append(f"{prefix}: detector_event_count mismatch")
+
+        if row["data_split"] != google_data_split(row["shot_index"]):
+            problems.append(f"{prefix}: data_split does not match the course split")
+        if row["distance"] == 3 and detector_count != 200:
+            problems.append(f"{prefix}: distance 3 must have 200 detectors")
+        if row["distance"] == 5 and detector_count != 600:
+            problems.append(f"{prefix}: distance 5 must have 600 detectors")
+        for column in prediction_columns:
+            if not isinstance(row[column], bool):
+                problems.append(f"{prefix}: invalid {column}")
+        if not isinstance(row["actual_observable_flip"], bool):
+            problems.append(f"{prefix}: invalid actual_observable_flip")
+        if len(problems) > 20:
+            problems.append("... more problems omitted")
+            break
+    return problems
+
+
+def export_ml_examples(connection: psycopg.Connection) -> pa.Table:
+    table = fetch_ml_examples(connection)
+    problems = contract_problems(table)
+    if problems:
+        raise ContractError("ml_google_decoder_example: " + "; ".join(problems))
+    return table
+
+
+# ---------------------------------------------------------------- analysis and tracing
 
 
 def run_analyses(connection: psycopg.Connection, out_dir: Path) -> list[Path]:
@@ -328,8 +455,6 @@ def trace_example(connection: psycopg.Connection, results_dir: Path) -> dict[str
       - 4 decoder predictions (.01 files)
     """
     import pyarrow.compute as pc
-    import pyarrow.parquet as pq
-    from quantum_lake_student.ml import google_data_split
 
     cursor = connection.cursor()
     cursor.execute(
@@ -403,7 +528,7 @@ def trace_example(connection: psycopg.Connection, results_dir: Path) -> dict[str
 
     return {
         "ml": {
-            "table": "ml/ml_google_decoder_example.parquet",
+            "table": ML_OBJECT,
             "example_id": example_id,
             "data_split": google_data_split(shot_index),
             "actual_observable_flip": bool(data["actual_observable_flip"]),

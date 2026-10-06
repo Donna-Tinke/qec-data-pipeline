@@ -7,83 +7,24 @@ fixed contracts, and write Parquet. It must not re-read Bronze or Silver.
 
 from __future__ import annotations
 
-import io
 from pathlib import Path
-from typing import Any
-
-import pyarrow as pa
-import pyarrow.parquet as pq
 
 from quantum_lake_student.config import Settings
-from quantum_lake_student.connections import minio_client, postgres_connection
-from quantum_lake_student.ml import google_data_split
+from quantum_lake_student.connections import postgres_connection
 from quantum_lake_student.models import StageResult
-
-GOOGLE_ML_SCHEMA = pa.schema(
-    [
-        ("example_id", pa.string()),
-        ("experiment_id", pa.string()),
-        ("shot_index", pa.int64()),
-        ("distance", pa.int32()),
-        ("rounds", pa.int32()),
-        ("center_row", pa.int32()),
-        ("center_col", pa.int32()),
-        ("detector_count", pa.int32()),
-        ("detector_event_count", pa.int32()),
-        ("detector_bits", pa.binary()),
-        ("belief_matching_prediction", pa.bool_()),
-        ("correlated_matching_prediction", pa.bool_()),
-        ("pymatching_prediction", pa.bool_()),
-        ("tensor_network_contraction_prediction", pa.bool_()),
-        ("actual_observable_flip", pa.bool_()),
-        ("data_split", pa.string()),
-    ]
-)
 
 
 def export_google_ml_table(settings: Settings) -> int:
     """Export gold.v_ml_google_decoder_example to ml/ml_google_decoder_example.parquet."""
+    from quantum_lake_student.gold import google_qec as gold_google_qec
+    from quantum_lake_student.lake import write_parquet
+
     with postgres_connection(settings) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT example_id, experiment_id, shot_index, distance, rounds,
-                   center_row, center_col, detector_count, detector_event_count,
-                   detector_bits, belief_matching_prediction,
-                   correlated_matching_prediction, pymatching_prediction,
-                   tensor_network_contraction_prediction, actual_observable_flip
-            FROM gold.v_ml_google_decoder_example
-            ORDER BY experiment_id, shot_index
-            """
-        )
-        col_names = [d[0] for d in cursor.description]
-        records = []
-        for row in cursor.fetchall():
-            d = dict(zip(col_names, row))
-            d["detector_bits"] = bytes(d["detector_bits"])
-            d["data_split"] = google_data_split(d["shot_index"])
-            records.append(d)
+        conn.execute("SET search_path TO gold, public")
+        table = gold_google_qec.export_ml_examples(conn)
 
-    table = pa.Table.from_pylist(records, schema=GOOGLE_ML_SCHEMA)
-
-    if settings.lake_backend == "local":
-        local_path = settings.local_lake_root / "ml" / "ml_google_decoder_example.parquet"
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        pq.write_table(table, local_path, compression="zstd")
-    else:
-        buf = io.BytesIO()
-        pq.write_table(table, buf, compression="zstd")
-        val = buf.getvalue()
-        client = minio_client(settings)
-        client.put_object(
-            settings.s3_bucket,
-            "ml/ml_google_decoder_example.parquet",
-            io.BytesIO(val),
-            length=len(val),
-            content_type="application/octet-stream",
-        )
-
-    return len(records)
+    write_parquet(table, gold_google_qec.ML_OBJECT, settings)
+    return table.num_rows
 
 
 def export_syndrome_ml_table(settings: Settings) -> int:
