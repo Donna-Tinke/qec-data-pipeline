@@ -9,7 +9,10 @@ transaction: it either completes or the previous Gold version is untouched.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
+import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +20,7 @@ import psycopg
 import pyarrow.parquet as pq
 
 from quantum_lake_student.config import Settings
-from quantum_lake_student.connections import postgres_connection
+from quantum_lake_student.connections import minio_client, postgres_connection
 from quantum_lake_student.models import StageResult
 
 SQL_DIR = Path(__file__).parent / "sql" / "google_qec"
@@ -68,7 +71,22 @@ def _sql(name: str) -> str:
 
 
 def silver_dir(settings: Settings) -> Path:
-    return settings.local_lake_root / "silver" / "google_qec"
+    if settings.lake_backend == "local":
+        return settings.local_lake_root / "silver" / "google_qec"
+
+    target_dir = Path(tempfile.mkdtemp(prefix="silver_google_qec_"))
+    try:
+        client = minio_client(settings)
+        for name in ("experiment.parquet", "shot.parquet"):
+            client.fget_object(
+                settings.s3_bucket,
+                f"silver/google_qec/{name}",
+                str(target_dir / name),
+            )
+    except Exception:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise
+    return target_dir
 
 
 def _copy_parquet(
@@ -173,7 +191,7 @@ def load_gold(connection: psycopg.Connection, silver: Path) -> dict[str, int]:
 
 
 def run_analyses(connection: psycopg.Connection, out_dir: Path) -> list[Path]:
-    """Run the committed analysis SQL and store each result as JSON."""
+    """Run the committed analysis SQL and detector-storage comparison, storing each result as JSON."""
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for sql_path in sorted((SQL_DIR / "analysis").glob("*.sql")):
@@ -183,6 +201,10 @@ def run_analyses(connection: psycopg.Connection, out_dir: Path) -> list[Path]:
         target = out_dir / f"{sql_path.stem}.json"
         target.write_text(json.dumps({"query": sql_path.name, "rows": rows}, indent=2, default=str))
         written.append(target)
+    storage = measure_detector_storage(connection)
+    storage_target = out_dir / "google_detector_storage.json"
+    storage_target.write_text(json.dumps(storage, indent=2))
+    written.append(storage_target)
     return written
 
 
@@ -268,22 +290,173 @@ def measure_detector_storage(
     }
 
 
-def run(run_id: str) -> StageResult:
-    settings = Settings.from_environment()
+def run(
+    run_id: str,
+    settings: Settings | None = None,
+    connection: psycopg.Connection | None = None,
+) -> StageResult:
+    if settings is None:
+        settings = Settings.from_environment()
     result = StageResult(stage="gold.google_qec", run_id=run_id)
-    results_dir = settings.local_lake_root / "results" / "part1"
-    with postgres_connection(settings) as connection:
-        counts = load_gold(connection, silver_dir(settings))
-        run_analyses(connection, results_dir / "analysis")
-        storage = measure_detector_storage(connection)
-    (results_dir / "analysis" / "google_detector_storage.json").write_text(
-        json.dumps(storage, indent=2)
+
+    s_dir = silver_dir(settings)
+    try:
+        conn_ctx = nullcontext(connection) if connection is not None else postgres_connection(settings)
+        with conn_ctx as conn:
+            counts = load_gold(conn, s_dir)
+        result.input_count = counts["silver_shots"]
+        result.output_count = counts["gold.google_shot"]
+        result.table_counts = {
+            k: v for k, v in counts.items() if k.startswith("gold.")
+        }
+        result.finish()
+        return result
+    finally:
+        if settings.lake_backend == "minio" and s_dir.exists():
+            shutil.rmtree(s_dir)
+
+
+def trace_example(connection: psycopg.Connection, results_dir: Path) -> dict[str, Any]:
+    """Follow one Google ML example back through Gold and Silver to its Bronze companion files.
+
+    Harmonized with the 5-tier lineage schema (ml -> gold -> silver -> bronze -> prediction).
+    One Google shot is composed of 8 companion files in Bronze:
+      - measurements.b8 (measurement bits)
+      - sweep.b8 (sweep parameters)
+      - detection_events.b8 (detector events)
+      - obs_flips_actual.01 (actual flip labels)
+      - 4 decoder predictions (.01 files)
+    """
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+    from quantum_lake_student.ml import google_data_split
+
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        SELECT s.example_id, s.experiment_id, s.shot_index,
+               e.source_record_id AS experiment_source_record_id,
+               e.basis, e.distance, e.rounds, e.shots,
+               e.center_row, e.center_col, e.measurement_count, e.detector_count,
+               s.detector_bits, s.detector_event_count, s.actual_observable_flip,
+               r.measurement_bits, r.sweep_bits,
+               s.belief_matching_prediction, s.correlated_matching_prediction,
+               s.pymatching_prediction, s.tensor_network_contraction_prediction
+        FROM gold.v_ml_google_decoder_example s
+        JOIN gold.google_experiment e USING (experiment_id)
+        JOIN gold.google_shot_raw r USING (experiment_id, shot_index)
+        WHERE s.shot_index % 2 = 1
+        ORDER BY s.shot_index
+        LIMIT 1
+        """
     )
-    (results_dir / "gold_google_qec_counts.json").write_text(json.dumps(counts, indent=2))
-    result.input_count = counts["silver_shots"]
-    result.output_count = counts["gold.google_shot"]
-    result.finish()
-    return result
+    col_names = [d[0] for d in cursor.description]
+    row = cursor.fetchone()
+    if not row:
+        return {}
+
+    data = dict(zip(col_names, row))
+    example_id = data["example_id"]
+    experiment_id = data["experiment_id"]
+    shot_index = data["shot_index"]
+    source_record_id = f"google_qec:{experiment_id}:shot={shot_index}"
+
+    cursor.execute(
+        """
+        SELECT p.experiment_id, p.shot_index, p.decoder_id, d.decoder_name, p.predicted_flip
+        FROM gold.google_shot_prediction p
+        JOIN gold.decoder d USING (decoder_id)
+        WHERE p.experiment_id = %s AND p.shot_index = %s
+        ORDER BY p.decoder_id
+        """,
+        (experiment_id, shot_index),
+    )
+    prediction_rows = [
+        {
+            "experiment_id": r[0],
+            "shot_index": r[1],
+            "decoder_id": r[2],
+            "decoder_name": r[3],
+            "predicted_flip": bool(r[4]),
+        }
+        for r in cursor.fetchall()
+    ]
+
+    companion_traces: list[dict[str, Any]] = []
+    candidates = [
+        results_dir / "source_trace.parquet",
+        Path("results/part1/source_trace.parquet"),
+    ]
+    for trace_path in candidates:
+        if trace_path.exists():
+            try:
+                table = pq.read_table(trace_path)
+                g_mask = pc.and_(
+                    pc.equal(table["source_name"], "google_qec"),
+                    pc.equal(table["source_record_id"], source_record_id),
+                )
+                companion_traces = table.filter(g_mask).to_pylist()
+                if companion_traces:
+                    break
+            except Exception:
+                continue
+
+    return {
+        "ml": {
+            "table": "ml/ml_google_decoder_example.parquet",
+            "example_id": example_id,
+            "data_split": google_data_split(shot_index),
+            "actual_observable_flip": bool(data["actual_observable_flip"]),
+            "detector_event_count": data["detector_event_count"],
+        },
+        "gold": {
+            "v_google_example_lookup": {
+                "example_id": example_id,
+                "experiment_id": experiment_id,
+                "shot_index": shot_index,
+                "source_record_id": source_record_id,
+            },
+            "google_shot": {
+                "experiment_id": experiment_id,
+                "shot_index": shot_index,
+                "detector_bits_hex": bytes(data["detector_bits"]).hex(),
+                "detector_event_count": data["detector_event_count"],
+                "actual_observable_flip": bool(data["actual_observable_flip"]),
+                "source_record_id": source_record_id,
+            },
+            "google_experiment": {
+                "experiment_id": experiment_id,
+                "source_record_id": data["experiment_source_record_id"],
+                "basis": data["basis"],
+                "distance": data["distance"],
+                "rounds": data["rounds"],
+                "shots": data["shots"],
+                "center_row": data["center_row"],
+                "center_col": data["center_col"],
+                "measurement_count": data["measurement_count"],
+                "detector_count": data["detector_count"],
+            },
+            "google_shot_raw": {
+                "experiment_id": experiment_id,
+                "shot_index": shot_index,
+                "measurement_bits_hex": bytes(data["measurement_bits"]).hex(),
+                "sweep_bits_hex": bytes(data["sweep_bits"]).hex(),
+            },
+            "google_shot_prediction": prediction_rows,
+        },
+        "silver": {
+            "shot": {
+                "table": "silver/google_qec/shot.parquet",
+                "source_record_id": source_record_id,
+            },
+            "experiment": {
+                "table": "silver/google_qec/experiment.parquet",
+                "source_record_id": data["experiment_source_record_id"],
+            },
+        },
+        "bronze": companion_traces,
+        "prediction": "results/part2/predictions.parquet rows with this example_id",
+    }
 
 
 if __name__ == "__main__":

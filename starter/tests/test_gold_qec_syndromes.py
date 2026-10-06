@@ -297,4 +297,4 @@ def test_analysis_and_trace(pg, tmp_path: Path) -> None:
     # heaviest test-split example with a logical error: ONE_BIT, label 1, quantity 6
     assert trace["ml"]["data_split"] == "test"
     assert trace["ml"]["sample_weight"] == 6
-    assert trace["gold"]["syndrome_observation"]["source_record_id"] == trace["silver"]["source_record_id"]
+    assert trace["gold"]["syndrome_observation"]["source_record_id"] == trace["silver"]["syndrome_observation"]["source_record_id"]

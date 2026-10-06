@@ -538,6 +538,13 @@ def run(
     result.input_count = built.checks["rows_read"]
     result.output_count = built.checks["rows_accepted"]
     result.issue_count = len(built.issues)
+    result.table_counts["qec_syndromes.syndrome_observation"] = {
+        "read": built.checks["rows_read"],
+        "accepted": built.checks["rows_accepted"],
+        "rejected": built.checks["rows_rejected"],
+        "reconciled": built.checks["rows_reconcile"],
+        "weighted_shots": built.checks["weighted_total"],
+    }
     result.finish()
     return result
 

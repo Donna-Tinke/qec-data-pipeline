@@ -363,7 +363,12 @@ def trace_example(connection: psycopg.Connection, results_dir: Path) -> dict[str
                 "nominal_shot_count": nominal,
             },
         },
-        "silver": {"table": silver.SILVER_OBJECT, "source_record_id": source_record_id},
+        "silver": {
+            "syndrome_observation": {
+                "table": silver.SILVER_OBJECT,
+                "source_record_id": source_record_id,
+            },
+        },
         "bronze": bronze_rows,
         "prediction": "results/part2/predictions.parquet rows with this example_id",
     }
@@ -376,3 +381,31 @@ def write_trace_example(trace: dict[str, Any], results_dir: Path) -> None:
     existing[SOURCE_NAME] = trace
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(existing, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+
+
+def run(
+    run_id: str,
+    settings: Settings | None = None,
+    conn: psycopg.Connection | None = None,
+) -> StageResult:
+    """Execute QEC Syndromes Gold loading as a pipeline stage."""
+    from contextlib import nullcontext
+    from quantum_lake_student.connections import postgres_connection
+    from quantum_lake_student.models import StageResult
+
+    if settings is None:
+        settings = Settings.from_environment()
+
+    result = StageResult(stage="gold.qec_syndromes", run_id=run_id)
+
+    conn_ctx = nullcontext(conn) if conn is not None else postgres_connection(settings)
+    with conn_ctx as connection:
+        counts = load_from_lake(connection, settings)
+        result.input_count = counts.get("syndrome_observation", 0)
+        result.output_count = sum(counts.values())
+        result.table_counts = {
+            f"gold.{table}": count for table, count in counts.items()
+        }
+        result.finish()
+
+    return result

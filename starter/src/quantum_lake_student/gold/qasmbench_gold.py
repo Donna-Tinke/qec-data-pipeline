@@ -1,13 +1,16 @@
-"""QASMBench Gold relational schema and PostgreSQL loader.
+"""QASMBench Gold relational schema, PostgreSQL loader, and Part I SQL analysis.
 
-This module defines the relational DDL for QASMBench in PostgreSQL (under schema 'gold')
-and provides atomic, idempotent loading from Silver Parquet tables into Gold relations.
+This module defines the relational DDL for QASMBench in PostgreSQL (under schema 'gold'),
+provides atomic, idempotent loading from Silver Parquet tables into Gold relations,
+and executes the Part I Question 3 SQL analysis queries.
 """
 
 from __future__ import annotations
 
+import csv
 import json
-from typing import Any
+from contextlib import nullcontext
+from pathlib import Path
 import psycopg
 
 from quantum_lake_student.config import Settings
@@ -15,79 +18,19 @@ from quantum_lake_student.connections import postgres_connection
 from quantum_lake_student.models import StageResult
 from quantum_lake_student.sources.qasmbench_silver import read_lake_table
 
+SOURCE_NAME = "qasmbench"
+SQL_DIR = Path(__file__).parent / "sql" / SOURCE_NAME
 
-DDL_STATEMENTS = [
-    # 1. Gold Schema
-    "CREATE SCHEMA IF NOT EXISTS gold;",
 
-    # 2. Circuit Variant Table
-    """
-    CREATE TABLE IF NOT EXISTS gold.circuit (
-        circuit_id VARCHAR(64) PRIMARY KEY,
-        benchmark_name VARCHAR(64) NOT NULL,
-        variant VARCHAR(32) NOT NULL CHECK (variant IN ('source', 'transpiled')),
-        qubit_count INTEGER NOT NULL CHECK (qubit_count > 0),
-        measurement_count INTEGER NOT NULL CHECK (measurement_count >= 0),
-        two_qubit_gate_count INTEGER NOT NULL CHECK (two_qubit_gate_count >= 0),
-        source_record_id VARCHAR(255) NOT NULL
-    );
-    """,
-
-    # 3. Circuit Register Table 
-    """
-    CREATE TABLE IF NOT EXISTS gold.circuit_register (
-        circuit_id VARCHAR(64) REFERENCES gold.circuit(circuit_id) ON DELETE CASCADE,
-        register_name VARCHAR(64) NOT NULL,
-        register_type VARCHAR(16) NOT NULL CHECK (register_type IN ('qreg', 'creg')),
-        size INTEGER NOT NULL CHECK (size > 0),
-        PRIMARY KEY (circuit_id, register_name)
-    );
-    """,
-
-    # 4. Stabilizer Parity Check Table
-    """
-    CREATE TABLE IF NOT EXISTS gold.stabilizer_check (
-        circuit_id VARCHAR(64) REFERENCES gold.circuit(circuit_id) ON DELETE CASCADE,
-        check_id VARCHAR(128) NOT NULL,
-        ancilla_qubit VARCHAR(32) NOT NULL,
-        syndrome_bit VARCHAR(32) NOT NULL,
-        source_record_id VARCHAR(255) NOT NULL,
-        PRIMARY KEY (circuit_id, check_id)
-    );
-    """,
-
-    # 5. Stabilizer Data Qubit Association Table 
-    """
-    CREATE TABLE IF NOT EXISTS gold.stabilizer_data_qubit (
-        circuit_id VARCHAR(64) NOT NULL,
-        check_id VARCHAR(128) NOT NULL,
-        data_qubit VARCHAR(32) NOT NULL,
-        PRIMARY KEY (circuit_id, check_id, data_qubit),
-        FOREIGN KEY (circuit_id, check_id) REFERENCES gold.stabilizer_check(circuit_id, check_id) ON DELETE CASCADE,
-        FOREIGN KEY (circuit_id) REFERENCES gold.circuit(circuit_id) ON DELETE CASCADE
-    );
-    """,
-
-    # 6. Conditional Syndrome Correction Table (Natural Domain Key)
-    """
-    CREATE TABLE IF NOT EXISTS gold.conditional_correction (
-        circuit_id VARCHAR(64) REFERENCES gold.circuit(circuit_id) ON DELETE CASCADE,
-        condition_register VARCHAR(32) NOT NULL,
-        condition_value INTEGER NOT NULL CHECK (condition_value >= 0),
-        target_qubit VARCHAR(32) NOT NULL,
-        gate VARCHAR(16) NOT NULL,
-        source_record_id VARCHAR(255) NOT NULL,
-        PRIMARY KEY (circuit_id, target_qubit, condition_register, condition_value)
-    );
-    """,
-]
+def _sql(name: str) -> str:
+    """Read SQL query file from sql directory."""
+    return (SQL_DIR / name).read_text(encoding="utf-8")
 
 
 def init_schema(conn: psycopg.Connection) -> None:
     """Create the gold schema, tables, constraints, and indexes if they do not exist."""
     with conn.cursor() as cur:
-        for stmt in DDL_STATEMENTS:
-            cur.execute(stmt)
+        cur.execute(_sql("01_schema.sql"))
 
 
 def load_qasmbench_gold(
@@ -237,17 +180,76 @@ def load_qasmbench_gold(
     return counts
 
 
-def run(run_id: str, settings: Settings | None = None) -> StageResult:
+def run(
+    run_id: str,
+    settings: Settings | None = None,
+    conn: psycopg.Connection | None = None,
+) -> StageResult:
     """Execute QASMBench Gold schema initialization and loading as a pipeline stage."""
     if settings is None:
         settings = Settings.from_environment()
 
     result = StageResult(stage="gold.qasmbench", run_id=run_id)
 
-    with postgres_connection(settings) as conn:
-        counts = load_qasmbench_gold(conn, settings=settings)
+    conn_ctx = nullcontext(conn) if conn is not None else postgres_connection(settings)
+    with conn_ctx as connection:
+        counts = load_qasmbench_gold(connection, settings=settings)
         result.input_count = counts.get("circuit", 0)
         result.output_count = sum(counts.values())
+        result.table_counts = {
+            f"gold.{table}": count for table, count in counts.items()
+        }
         result.finish()
 
     return result
+
+
+# =============================================================================
+# Part I Analysis — Question 3: Repetition Code Mapping
+# =============================================================================
+
+QUESTION_3_QUERY = _sql("analysis/question_3_repetition_code.sql").strip()
+QUESTION_3_AGGREGATED_QUERY = _sql("analysis/question_3_repetition_code_aggregated.sql").strip()
+
+
+def run_analyses(
+    conn: psycopg.Connection,
+    output_dir: Path | None = None,
+    write_aggregated: bool = True,
+) -> Path:
+    """Execute the Part I Question 3 SQL analysis and write results to CSV.
+
+    Answers: "How does the repetition-code circuit map data qubits to parity-check
+    ancillas, syndrome bits, and conditional corrections?"
+    Joins 4 Gold tables (circuit, stabilizer_check, stabilizer_data_qubit,
+    conditional_correction).
+    """
+    if output_dir is None:
+        output_dir = Path("results/part1/analysis")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_path = output_dir / "question_3_repetition_code.csv"
+
+    with conn.cursor() as cur:
+        # 1. Execute standard 1NF relational query (4 rows)
+        cur.execute(QUESTION_3_QUERY)
+        headers = [col[0] for col in cur.description]
+        rows = cur.fetchall()
+
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            writer.writerows(rows)
+
+        # 2. Optionally write aggregated report (3 rows)
+        if write_aggregated:
+            agg_path = output_dir / "question_3_repetition_code_aggregated.csv"
+            cur.execute(QUESTION_3_AGGREGATED_QUERY)
+            agg_headers = [col[0] for col in cur.description]
+            agg_rows = cur.fetchall()
+            with open(agg_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(agg_headers)
+                writer.writerows(agg_rows)
+
+    return csv_path

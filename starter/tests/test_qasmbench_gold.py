@@ -11,7 +11,8 @@ import pytest
 
 from quantum_lake_student.config import Settings
 from quantum_lake_student.connections import postgres_connection
-from quantum_lake_student.sources import qasmbench_analysis, qasmbench_gold, qasmbench_silver
+from quantum_lake_student.gold import qasmbench_gold
+from quantum_lake_student.sources import qasmbench_silver
 
 # ---------------------------------------------------------------------------
 # TOGGLE: Set USE_TEMP_STORAGE = False (or run with USE_TEMP_STORAGE=0)
@@ -107,7 +108,7 @@ def test_part1_question_3_analysis(db_conn: psycopg.Connection, target_results_d
     qasmbench_gold.load_qasmbench_gold(db_conn)
 
     # Execute analysis pipeline and generate both CSV outputs
-    output_csv = qasmbench_analysis.run_question_3_analysis(db_conn, output_dir=target_results_dir)
+    output_csv = qasmbench_gold.run_analyses(db_conn, output_dir=target_results_dir)
 
     # 1. Verify primary relational CSV
     assert output_csv.exists()
@@ -161,22 +162,5 @@ def test_qasmbench_gold_stage_run(db_conn: psycopg.Connection):
     assert stage_res.output_count == 40
     assert stage_res.finished_at is not None
     assert stage_res.finished_at >= stage_res.started_at
-
-
-def test_qasmbench_analysis_stage_run(db_conn: psycopg.Connection, target_results_dir: Path):
-    settings = Settings.from_environment()
-    stage_res = qasmbench_analysis.run(
-        "test-analysis-stage-run",
-        settings=settings,
-        output_dir=target_results_dir,
-    )
-
-    assert stage_res.stage == "analysis.qasmbench"
-    assert stage_res.run_id == "test-analysis-stage-run"
-    assert stage_res.input_count == 1
-    assert stage_res.output_count == 2
-    assert stage_res.finished_at is not None
-    assert stage_res.finished_at >= stage_res.started_at
-    assert (target_results_dir / "question_3_repetition_code.csv").exists()
 
 

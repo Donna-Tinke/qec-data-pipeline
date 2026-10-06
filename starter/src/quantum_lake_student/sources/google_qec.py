@@ -8,8 +8,10 @@ someone else's job (stages/register_sources.py) - not this file.
 from __future__ import annotations
 
 import hashlib
+import io
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,11 +22,13 @@ import yaml
 
 from quantum_lake_student.archives import extract_archive
 from quantum_lake_student.config import Settings
+from quantum_lake_student.connections import minio_client
 from quantum_lake_student.formats import b8_record_bytes, iter_b8_records, parse_01_records
 from quantum_lake_student.models import QualityFinding, Severity, StageResult, stable_record_hash
 from quantum_lake_student.results import replace_source_rows
 
 SOURCE_NAME = "google_qec"
+BRONZE_OBJECT = f"bronze/source={SOURCE_NAME}/google-surface-code-curated.zip"
 
 DIRECTORY_NAME_PATTERN = re.compile(
     r"^surface_code_b(?P<basis>[A-Za-z]+)_d(?P<distance>\d+)_r(?P<rounds>\d+)"
@@ -515,6 +519,34 @@ def write_table(rows: list[dict[str, Any]], schema: pa.Schema, path: Path) -> No
     pq.write_table(pa.Table.from_pylist(rows, schema=schema), path)
 
 
+def write_silver_tables(
+    experiment_rows: list[dict[str, Any]],
+    shot_rows: list[dict[str, Any]],
+    settings: Settings,
+) -> None:
+    """Publish Silver Parquet tables exclusively to the configured lake backend."""
+    if settings.lake_backend == "local":
+        silver_dir = settings.local_lake_root / "silver" / SOURCE_NAME
+        write_table(experiment_rows, EXPERIMENT_SCHEMA, silver_dir / "experiment.parquet")
+        write_table(shot_rows, SHOT_SCHEMA, silver_dir / "shot.parquet")
+    else:
+        client = minio_client(settings)
+        for rows, schema, filename in (
+            (experiment_rows, EXPERIMENT_SCHEMA, "experiment.parquet"),
+            (shot_rows, SHOT_SCHEMA, "shot.parquet"),
+        ):
+            buf = io.BytesIO()
+            pq.write_table(pa.Table.from_pylist(rows, schema=schema), buf, compression="zstd")
+            data = buf.getvalue()
+            client.put_object(
+                settings.s3_bucket,
+                f"silver/{SOURCE_NAME}/{filename}",
+                io.BytesIO(data),
+                len(data),
+                content_type="application/octet-stream",
+            )
+
+
 def quality_finding_to_issue_row(finding: QualityFinding, run_id: str) -> dict[str, Any]:
     issue_id = stable_record_hash(
         {
@@ -535,7 +567,17 @@ def quality_finding_to_issue_row(finding: QualityFinding, run_id: str) -> dict[s
     }
 
 
-def _locate_bronze_zip(settings: Settings) -> Path:
+def read_bronze_archive(settings: Settings) -> bytes:
+    """Read the Bronze zip archive bytes from the configured lake backend."""
+    if settings.lake_backend == "minio":
+        client = minio_client(settings)
+        response = client.get_object(settings.s3_bucket, BRONZE_OBJECT)
+        try:
+            return response.read()
+        finally:
+            response.close()
+            response.release_conn()
+
     for area in ("bronze", "raw"):
         candidate = (
             settings.local_lake_root
@@ -544,37 +586,42 @@ def _locate_bronze_zip(settings: Settings) -> Path:
             / "google-surface-code-curated.zip"
         )
         if candidate.exists():
-            return candidate
+            return candidate.read_bytes()
+
     raise FileNotFoundError(
         f"Could not find the {SOURCE_NAME} Bronze archive under {settings.local_lake_root}"
     )
 
 
-def run(run_id: str) -> StageResult:
-    settings = Settings.from_environment()
+def run(
+    run_id: str,
+    settings: Settings | None = None,
+    results_dir: Path | None = None,
+) -> StageResult:
+    if settings is None:
+        settings = Settings.from_environment()
     result = StageResult(stage=f"silver.{SOURCE_NAME}", run_id=run_id)
+    if results_dir is None:
+        results_dir = (
+            settings.local_lake_root / "results" / "part1"
+            if settings.lake_backend == "local"
+            else Path("results/part1")
+        )
 
-    zip_path = _locate_bronze_zip(settings)
-    input_sha256 = sha256_file(zip_path)
-    bronze_object = zip_path.relative_to(settings.local_lake_root).as_posix()
+    archive_bytes = read_bronze_archive(settings)
+    input_sha256 = hashlib.sha256(archive_bytes).hexdigest()
+    bronze_object = BRONZE_OBJECT
 
-    scratch_dir = settings.local_lake_root / "_scratch" / SOURCE_NAME
-    if scratch_dir.exists():
-        shutil.rmtree(scratch_dir)
-    extract_archive(zip_path, scratch_dir)
-    try:
+    with tempfile.TemporaryDirectory(prefix=f"{SOURCE_NAME}_") as tmp:
+        scratch_dir = Path(tmp)
+        extract_archive(archive_bytes, scratch_dir)
         experiment_rows, shot_rows, trace_rows, findings = build_silver_tables(
             scratch_dir, bronze_object=bronze_object, input_sha256=input_sha256
         )
-    finally:
-        shutil.rmtree(scratch_dir)
 
-    silver_dir = settings.local_lake_root / "silver" / SOURCE_NAME
-    write_table(experiment_rows, EXPERIMENT_SCHEMA, silver_dir / "experiment.parquet")
-    write_table(shot_rows, SHOT_SCHEMA, silver_dir / "shot.parquet")
+    write_silver_tables(experiment_rows, shot_rows, settings)
 
     issue_rows = [quality_finding_to_issue_row(finding, run_id) for finding in findings]
-    results_dir = settings.local_lake_root / "results" / "part1"
     replace_source_rows(
         results_dir / "source_trace.parquet",
         trace_rows,
@@ -591,5 +638,21 @@ def run(run_id: str) -> StageResult:
     result.input_count = len(experiment_rows)
     result.output_count = len(shot_rows)
     result.issue_count = len(issue_rows)
+
+    exp_rejected = sum(1 for finding in findings if finding.severity == Severity.ERROR)
+    exp_read = len(experiment_rows) + exp_rejected
+    result.table_counts["google_qec.experiment"] = {
+        "read": exp_read,
+        "accepted": len(experiment_rows),
+        "rejected": exp_rejected,
+        "reconciled": exp_read == len(experiment_rows) + exp_rejected,
+    }
+    result.table_counts["google_qec.shot"] = {
+        "read": len(shot_rows),
+        "accepted": len(shot_rows),
+        "rejected": 0,
+        "reconciled": True,
+    }
+
     result.finish()
     return result

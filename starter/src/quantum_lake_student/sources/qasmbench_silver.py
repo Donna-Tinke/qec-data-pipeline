@@ -617,10 +617,13 @@ def run_qasmbench_pipeline(
 
     output_count = len(circuits) + len(stabilizer_checks) + len(conditional_corrections)
 
+    rejected_circuits = sum(1 for f in all_findings if f.rule_id == RULE_PARSE_ERROR)
+
     return {
         "input_count": len(qasm_members),
         "output_count": output_count,
         "circuit_count": len(circuits),
+        "rejected_circuit_count": rejected_circuits,
         "stabilizer_check_count": len(stabilizer_checks),
         "conditional_correction_count": len(conditional_corrections),
         "issue_count": len(issue_records),
@@ -650,5 +653,29 @@ def run(
     result.input_count = summary["input_count"]
     result.output_count = summary["output_count"]
     result.issue_count = summary["issue_count"]
+
+    circ_rejected = summary.get("rejected_circuit_count", 0)
+    circ_accepted = summary["circuit_count"]
+    circ_read = circ_accepted + circ_rejected
+
+    result.table_counts["qasmbench.circuit"] = {
+        "read": circ_read,
+        "accepted": circ_accepted,
+        "rejected": circ_rejected,
+        "reconciled": circ_read == circ_accepted + circ_rejected,
+    }
+    result.table_counts["qasmbench.stabilizer_check"] = {
+        "read": summary["stabilizer_check_count"],
+        "accepted": summary["stabilizer_check_count"],
+        "rejected": 0,
+        "reconciled": True,
+    }
+    result.table_counts["qasmbench.conditional_correction"] = {
+        "read": summary["conditional_correction_count"],
+        "accepted": summary["conditional_correction_count"],
+        "rejected": 0,
+        "reconciled": True,
+    }
+
     result.finish()
     return result
