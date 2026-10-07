@@ -66,12 +66,35 @@ def command_run(settings: Settings) -> int:
 
 
 def command_train(_: Settings) -> int:
-    console.print(
-        "[yellow]The AI/ML stage is intentionally unimplemented.[/yellow]\n"
-        "Consume the required ML input tables through the supplied helpers and "
-        "write model files and the required results/part2 files."
+    from datetime import UTC, datetime
+    import uuid
+    from .stages import train
+
+    model_run_id = f"train_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    console.print("[bold cyan]Starting Quantum Lake Model Training (Part II)...[/bold cyan]\n")
+    try:
+        res = train.run(model_run_id)
+    except Exception as exc:
+        console.print(f"[bold red]Model training failed:[/bold red] {exc}")
+        return 1
+
+    table = Table(title=f"Part II Model Training Results ({res.run_id})")
+    table.add_column("Stage", style="cyan")
+    table.add_column("Input Count", justify="right")
+    table.add_column("Output Count", justify="right")
+    table.add_column("Status", style="green")
+    table.add_row(
+        res.stage,
+        f"{res.input_count:,}",
+        f"{res.output_count:,}",
+        "[green]SUCCESS[/green]",
     )
-    return 2
+    console.print(table)
+    console.print(
+        "\n[green]Completed![/green] "
+        "Generated deliverables written to [bold]results/part2/[/bold]."
+    )
+    return 0
 
 
 def parser() -> argparse.ArgumentParser:
