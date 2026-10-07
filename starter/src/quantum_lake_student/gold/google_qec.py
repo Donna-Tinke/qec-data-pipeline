@@ -9,9 +9,7 @@ transaction: it either completes or the previous Gold version is untouched.
 from __future__ import annotations
 
 import json
-import shutil
 import sys
-import tempfile
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -21,7 +19,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from quantum_lake_student.config import Settings
-from quantum_lake_student.connections import minio_client, postgres_connection
+from quantum_lake_student.connections import postgres_connection
+from quantum_lake_student.lake import read_parquet
 from quantum_lake_student.ml import (
     MODEL_SPLITS,
     google_data_split,
@@ -102,42 +101,37 @@ def _sql(name: str) -> str:
     return (SQL_DIR / name).read_text()
 
 
-def silver_dir(settings: Settings) -> Path:
-    if settings.lake_backend == "local":
-        return settings.local_lake_root / "silver" / "google_qec"
-
-    target_dir = Path(tempfile.mkdtemp(prefix="silver_google_qec_"))
-    try:
-        client = minio_client(settings)
-        for name in ("experiment.parquet", "shot.parquet"):
-            client.fget_object(
-                settings.s3_bucket,
-                f"silver/google_qec/{name}",
-                str(target_dir / name),
-            )
-    except Exception:
-        shutil.rmtree(target_dir, ignore_errors=True)
-        raise
-    return target_dir
+def read_silver_tables(settings: Settings) -> tuple[pa.Table, pa.Table]:
+    """Read the experiment and shot Silver Parquet tables from the lake in memory."""
+    return (
+        read_parquet("silver/google_qec/experiment.parquet", settings),
+        read_parquet("silver/google_qec/shot.parquet", settings),
+    )
 
 
 def _copy_parquet(
-    cursor: psycopg.Cursor, path: Path, table: str, columns: tuple[tuple[str, str], ...]
+    cursor: psycopg.Cursor,
+    source: pa.Table,
+    table: str,
+    columns: tuple[tuple[str, str], ...],
 ) -> int:
-    names = ", ".join(name for name, _ in columns)
+    col_names = [name for name, _ in columns]
+    names = ", ".join(col_names)
     rows = 0
     with cursor.copy(f"COPY {table} ({names}) FROM STDIN (FORMAT BINARY)") as copy:
         copy.set_types([pg_type for _, pg_type in columns])
-        for batch in pq.ParquetFile(path).iter_batches(
-            batch_size=BATCH_ROWS, columns=[name for name, _ in columns]
-        ):
-            for row in zip(*(batch.column(name).to_pylist() for name, _ in columns)):
+        for batch in source.select(col_names).to_batches(max_chunksize=BATCH_ROWS):
+            for row in zip(*(batch.column(name).to_pylist() for name in col_names)):
                 copy.write_row(row)
             rows += batch.num_rows
     return rows
 
 
-def load_gold(connection: psycopg.Connection, silver: Path) -> dict[str, int]:
+def load_gold(
+    connection: psycopg.Connection,
+    experiments_table: pa.Table,
+    shots_table: pa.Table,
+) -> dict[str, int]:
     """Replace the google_qec Gold objects atomically. Returns row counts."""
     shot_columns = ", ".join(f"{name} {pg_type}" for name, pg_type in SHOT_STAGING_COLUMNS)
     prediction_values = ", ".join(
@@ -148,11 +142,11 @@ def load_gold(connection: psycopg.Connection, silver: Path) -> dict[str, int]:
         cursor.execute(_sql("01_schema.sql"))
 
         experiments = _copy_parquet(
-            cursor, silver / "experiment.parquet", "gold.google_experiment", EXPERIMENT_COLUMNS
+            cursor, experiments_table, "gold.google_experiment", EXPERIMENT_COLUMNS
         )
         cursor.execute("DROP TABLE IF EXISTS pg_temp.stg_shot")
         cursor.execute(f"CREATE TEMP TABLE stg_shot ({shot_columns}) ON COMMIT DROP")
-        staged = _copy_parquet(cursor, silver / "shot.parquet", "stg_shot", SHOT_STAGING_COLUMNS)
+        staged = _copy_parquet(cursor, shots_table, "stg_shot", SHOT_STAGING_COLUMNS)
 
         cursor.execute(
             """
@@ -426,21 +420,17 @@ def run(
         settings = Settings.from_environment()
     result = StageResult(stage="gold.google_qec", run_id=run_id)
 
-    s_dir = silver_dir(settings)
-    try:
-        conn_ctx = nullcontext(connection) if connection is not None else postgres_connection(settings)
-        with conn_ctx as conn:
-            counts = load_gold(conn, s_dir)
-        result.input_count = counts["silver_shots"]
-        result.output_count = counts["gold.google_shot"]
-        result.table_counts = {
-            k: v for k, v in counts.items() if k.startswith("gold.")
-        }
-        result.finish()
-        return result
-    finally:
-        if settings.lake_backend == "minio" and s_dir.exists():
-            shutil.rmtree(s_dir)
+    experiments_table, shots_table = read_silver_tables(settings)
+    conn_ctx = nullcontext(connection) if connection is not None else postgres_connection(settings)
+    with conn_ctx as conn:
+        counts = load_gold(conn, experiments_table, shots_table)
+    result.input_count = counts["silver_shots"]
+    result.output_count = counts["gold.google_shot"]
+    result.table_counts = {
+        k: v for k, v in counts.items() if k.startswith("gold.")
+    }
+    result.finish()
+    return result
 
 
 def trace_example(connection: psycopg.Connection, results_dir: Path) -> dict[str, Any]:

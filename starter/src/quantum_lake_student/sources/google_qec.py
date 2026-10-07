@@ -10,8 +10,7 @@ from __future__ import annotations
 import hashlib
 import io
 import re
-import shutil
-import tempfile
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,10 +19,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
 
-from quantum_lake_student.archives import extract_archive
+from quantum_lake_student.archives import safe_member_names
 from quantum_lake_student.config import Settings
 from quantum_lake_student.connections import minio_client
 from quantum_lake_student.formats import b8_record_bytes, iter_b8_records, parse_01_records
+from quantum_lake_student.lake import write_parquet
 from quantum_lake_student.models import QualityFinding, Severity, StageResult, stable_record_hash
 from quantum_lake_student.results import replace_source_rows
 
@@ -493,14 +493,13 @@ def process_experiment_dir(
 def build_silver_tables(
     root: Path, *, bronze_object: str, input_sha256: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[QualityFinding]]:
-    # root must already be extracted (see run() below, uses archives.extract_archive)
     experiment_rows: list[dict[str, Any]] = []
     shot_rows: list[dict[str, Any]] = []
     trace_rows: list[dict[str, Any]] = []
     findings: list[QualityFinding] = []
 
     for experiment_dir in iter_experiment_dirs(root):
-        if not (experiment_dir / "properties.yml").exists():
+        if not (experiment_dir / "properties.yml").is_file():
             continue
         processed = process_experiment_dir(
             experiment_dir, bronze_object=bronze_object, input_sha256=input_sha256
@@ -525,26 +524,16 @@ def write_silver_tables(
     settings: Settings,
 ) -> None:
     """Publish Silver Parquet tables exclusively to the configured lake backend."""
-    if settings.lake_backend == "local":
-        silver_dir = settings.local_lake_root / "silver" / SOURCE_NAME
-        write_table(experiment_rows, EXPERIMENT_SCHEMA, silver_dir / "experiment.parquet")
-        write_table(shot_rows, SHOT_SCHEMA, silver_dir / "shot.parquet")
-    else:
-        client = minio_client(settings)
-        for rows, schema, filename in (
-            (experiment_rows, EXPERIMENT_SCHEMA, "experiment.parquet"),
-            (shot_rows, SHOT_SCHEMA, "shot.parquet"),
-        ):
-            buf = io.BytesIO()
-            pq.write_table(pa.Table.from_pylist(rows, schema=schema), buf, compression="zstd")
-            data = buf.getvalue()
-            client.put_object(
-                settings.s3_bucket,
-                f"silver/{SOURCE_NAME}/{filename}",
-                io.BytesIO(data),
-                len(data),
-                content_type="application/octet-stream",
-            )
+    write_parquet(
+        pa.Table.from_pylist(experiment_rows, schema=EXPERIMENT_SCHEMA),
+        f"silver/{SOURCE_NAME}/experiment.parquet",
+        settings,
+    )
+    write_parquet(
+        pa.Table.from_pylist(shot_rows, schema=SHOT_SCHEMA),
+        f"silver/{SOURCE_NAME}/shot.parquet",
+        settings,
+    )
 
 
 def quality_finding_to_issue_row(finding: QualityFinding, run_id: str) -> dict[str, Any]:
@@ -612,11 +601,10 @@ def run(
     input_sha256 = hashlib.sha256(archive_bytes).hexdigest()
     bronze_object = BRONZE_OBJECT
 
-    with tempfile.TemporaryDirectory(prefix=f"{SOURCE_NAME}_") as tmp:
-        scratch_dir = Path(tmp)
-        extract_archive(archive_bytes, scratch_dir)
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
+        safe_member_names(archive)
         experiment_rows, shot_rows, trace_rows, findings = build_silver_tables(
-            scratch_dir, bronze_object=bronze_object, input_sha256=input_sha256
+            zipfile.Path(archive), bronze_object=bronze_object, input_sha256=input_sha256
         )
 
     write_silver_tables(experiment_rows, shot_rows, settings)

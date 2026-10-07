@@ -7,7 +7,6 @@ course platform's ``postgres`` service) and are skipped when it is unreachable.
 from __future__ import annotations
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
 from quantum_lake_student.config import Settings
@@ -59,14 +58,10 @@ def _shot_rows(detector_bits_per_shot):
     return rows
 
 
-def _write_silver(directory, experiments, shots):
-    directory.mkdir(parents=True, exist_ok=True)
-    pq.write_table(
+def _silver_tables(experiments, shots) -> tuple[pa.Table, pa.Table]:
+    return (
         pa.Table.from_pylist(experiments, schema=silver.EXPERIMENT_SCHEMA),
-        directory / "experiment.parquet",
-    )
-    pq.write_table(
-        pa.Table.from_pylist(shots, schema=silver.SHOT_SCHEMA), directory / "shot.parquet"
+        pa.Table.from_pylist(shots, schema=silver.SHOT_SCHEMA),
     )
 
 
@@ -89,15 +84,15 @@ def connection():
     conn.close()
 
 
-def test_load_builds_expected_rows_and_is_repeatable(tmp_path, connection):
-    _write_silver(tmp_path, [_experiment_row()], _shot_rows(GOOD_BITS))
-    first = gold.load_gold(connection, tmp_path)
+def test_load_builds_expected_rows_and_is_repeatable(connection):
+    tables = _silver_tables([_experiment_row()], _shot_rows(GOOD_BITS))
+    first = gold.load_gold(connection, *tables)
     ids = connection.execute(
         "SELECT array_agg(example_id ORDER BY shot_index) FROM gold.v_google_example_lookup "
         "WHERE experiment_id = %s",
         (EXPERIMENT,),
     ).fetchone()[0]
-    second = gold.load_gold(connection, tmp_path)
+    second = gold.load_gold(connection, *tables)
     ids_again = connection.execute(
         "SELECT array_agg(example_id ORDER BY shot_index) FROM gold.v_google_example_lookup "
         "WHERE experiment_id = %s",
@@ -110,9 +105,8 @@ def test_load_builds_expected_rows_and_is_repeatable(tmp_path, connection):
     assert ids == ids_again and len(set(ids)) == 4
 
 
-def test_ml_view_reproduces_packed_bytes_and_wide_predictions(tmp_path, connection):
-    _write_silver(tmp_path, [_experiment_row()], _shot_rows(GOOD_BITS))
-    gold.load_gold(connection, tmp_path)
+def test_ml_view_reproduces_packed_bytes_and_wide_predictions(connection):
+    gold.load_gold(connection, *_silver_tables([_experiment_row()], _shot_rows(GOOD_BITS)))
     rows = connection.execute(
         "SELECT shot_index, detector_bits, detector_event_count, detector_count, "
         "belief_matching_prediction, correlated_matching_prediction, "
@@ -126,9 +120,8 @@ def test_ml_view_reproduces_packed_bytes_and_wide_predictions(tmp_path, connecti
     assert [r[6] for r in rows] == [True, False, True, False]
 
 
-def test_decoder_mistake_is_derived_not_stored(tmp_path, connection):
-    _write_silver(tmp_path, [_experiment_row()], _shot_rows(GOOD_BITS))
-    gold.load_gold(connection, tmp_path)
+def test_decoder_mistake_is_derived_not_stored(connection):
+    gold.load_gold(connection, *_silver_tables([_experiment_row()], _shot_rows(GOOD_BITS)))
     mistakes = dict(
         connection.execute(
             "SELECT decoder_name, count(*) FILTER (WHERE is_logical_error) "
@@ -144,9 +137,8 @@ def test_decoder_mistake_is_derived_not_stored(tmp_path, connection):
     }
 
 
-def test_position_stats_use_b8_bit_order(tmp_path, connection):
-    _write_silver(tmp_path, [_experiment_row()], _shot_rows(GOOD_BITS))
-    gold.load_gold(connection, tmp_path)
+def test_position_stats_use_b8_bit_order(connection):
+    gold.load_gold(connection, *_silver_tables([_experiment_row()], _shot_rows(GOOD_BITS)))
     fired = dict(
         connection.execute(
             "SELECT detector_index, fired_count FROM gold.google_detector_position_stat "
@@ -167,10 +159,8 @@ def _before_state(connection):
     "corrupt",
     ["event_count", "padding", "length"],
 )
-def test_bad_silver_is_rejected_and_previous_version_survives(tmp_path, connection, corrupt):
-    good = tmp_path / "good"
-    _write_silver(good, [_experiment_row()], _shot_rows(GOOD_BITS))
-    gold.load_gold(connection, good)
+def test_bad_silver_is_rejected_and_previous_version_survives(connection, corrupt):
+    gold.load_gold(connection, *_silver_tables([_experiment_row()], _shot_rows(GOOD_BITS)))
     before = _before_state(connection)
 
     shots = _shot_rows(GOOD_BITS)
@@ -182,23 +172,19 @@ def test_bad_silver_is_rejected_and_previous_version_survives(tmp_path, connecti
     else:  # wrong number of bytes for detector_count
         shots[1]["detector_bits"] = b"\x00"
         shots[1]["detector_event_count"] = 0
-    bad = tmp_path / "bad"
-    _write_silver(bad, [_experiment_row()], shots)
 
     with pytest.raises((gold.GoldLoadError, psycopg.errors.CheckViolation)):
-        gold.load_gold(connection, bad)
+        gold.load_gold(connection, *_silver_tables([_experiment_row()], shots))
     assert _before_state(connection) == before
 
 
-def test_shot_count_must_match_experiment(tmp_path, connection):
-    _write_silver(tmp_path, [_experiment_row(shots=5)], _shot_rows(GOOD_BITS))
+def test_shot_count_must_match_experiment(connection):
     with pytest.raises(gold.GoldLoadError):
-        gold.load_gold(connection, tmp_path)
+        gold.load_gold(connection, *_silver_tables([_experiment_row(shots=5)], _shot_rows(GOOD_BITS)))
 
 
-def test_constraints_reject_invalid_rows(tmp_path, connection):
-    _write_silver(tmp_path, [_experiment_row()], _shot_rows(GOOD_BITS))
-    gold.load_gold(connection, tmp_path)
+def test_constraints_reject_invalid_rows(connection):
+    gold.load_gold(connection, *_silver_tables([_experiment_row()], _shot_rows(GOOD_BITS)))
     with pytest.raises(psycopg.errors.ForeignKeyViolation):
         connection.execute(
             "INSERT INTO gold.google_shot_prediction VALUES (%s, 0, 99, true)", (EXPERIMENT,)
