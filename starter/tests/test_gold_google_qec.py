@@ -73,6 +73,9 @@ GOOD_BITS = [
 ]
 
 
+TEST_SCHEMA = "gold_test"
+
+
 @pytest.fixture
 def connection():
     settings = Settings.from_environment()
@@ -80,21 +83,27 @@ def connection():
         conn = psycopg.connect(settings.postgres_dsn, autocommit=True, connect_timeout=3)
     except psycopg.OperationalError:
         pytest.skip("PostgreSQL is not reachable")
+    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {TEST_SCHEMA}")
+    conn.execute(f"SET search_path TO {TEST_SCHEMA}")
     yield conn
+    conn.execute(f"DROP SCHEMA IF EXISTS {TEST_SCHEMA} CASCADE")
     conn.close()
 
 
+def _load(connection, experiments, shots):
+    return gold.load_gold(connection, *_silver_tables(experiments, shots), schema=TEST_SCHEMA)
+
+
 def test_load_builds_expected_rows_and_is_repeatable(connection):
-    tables = _silver_tables([_experiment_row()], _shot_rows(GOOD_BITS))
-    first = gold.load_gold(connection, *tables)
+    first = _load(connection, [_experiment_row()], _shot_rows(GOOD_BITS))
     ids = connection.execute(
-        "SELECT array_agg(example_id ORDER BY shot_index) FROM gold.v_google_example_lookup "
+        "SELECT array_agg(example_id ORDER BY shot_index) FROM v_google_example_lookup "
         "WHERE experiment_id = %s",
         (EXPERIMENT,),
     ).fetchone()[0]
-    second = gold.load_gold(connection, *tables)
+    second = _load(connection, [_experiment_row()], _shot_rows(GOOD_BITS))
     ids_again = connection.execute(
-        "SELECT array_agg(example_id ORDER BY shot_index) FROM gold.v_google_example_lookup "
+        "SELECT array_agg(example_id ORDER BY shot_index) FROM v_google_example_lookup "
         "WHERE experiment_id = %s",
         (EXPERIMENT,),
     ).fetchone()[0]
@@ -106,12 +115,12 @@ def test_load_builds_expected_rows_and_is_repeatable(connection):
 
 
 def test_ml_view_reproduces_packed_bytes_and_wide_predictions(connection):
-    gold.load_gold(connection, *_silver_tables([_experiment_row()], _shot_rows(GOOD_BITS)))
+    _load(connection, [_experiment_row()], _shot_rows(GOOD_BITS))
     rows = connection.execute(
         "SELECT shot_index, detector_bits, detector_event_count, detector_count, "
         "belief_matching_prediction, correlated_matching_prediction, "
         "pymatching_prediction, actual_observable_flip "
-        "FROM gold.v_ml_google_decoder_example ORDER BY shot_index"
+        "FROM v_ml_google_decoder_example ORDER BY shot_index"
     ).fetchall()
     assert [bytes(r[1]) for r in rows] == [silver.pack_bits(tuple(b)) for b in GOOD_BITS]
     assert [r[2] for r in rows] == [2, 0, 10, 5]
@@ -121,11 +130,11 @@ def test_ml_view_reproduces_packed_bytes_and_wide_predictions(connection):
 
 
 def test_decoder_mistake_is_derived_not_stored(connection):
-    gold.load_gold(connection, *_silver_tables([_experiment_row()], _shot_rows(GOOD_BITS)))
+    _load(connection, [_experiment_row()], _shot_rows(GOOD_BITS))
     mistakes = dict(
         connection.execute(
             "SELECT decoder_name, count(*) FILTER (WHERE is_logical_error) "
-            "FROM gold.v_google_decoder_outcome GROUP BY decoder_name"
+            "FROM v_google_decoder_outcome GROUP BY decoder_name"
         ).fetchall()
     )
     # actual flips on shots 0 and 2
@@ -138,10 +147,10 @@ def test_decoder_mistake_is_derived_not_stored(connection):
 
 
 def test_position_stats_use_b8_bit_order(connection):
-    gold.load_gold(connection, *_silver_tables([_experiment_row()], _shot_rows(GOOD_BITS)))
+    _load(connection, [_experiment_row()], _shot_rows(GOOD_BITS))
     fired = dict(
         connection.execute(
-            "SELECT detector_index, fired_count FROM gold.google_detector_position_stat "
+            "SELECT detector_index, fired_count FROM google_detector_position_stat "
             "WHERE experiment_id = %s",
             (EXPERIMENT,),
         ).fetchall()
@@ -151,7 +160,7 @@ def test_position_stats_use_b8_bit_order(connection):
 
 def _before_state(connection):
     return connection.execute(
-        "SELECT count(*), coalesce(sum(detector_event_count), 0) FROM gold.google_shot"
+        "SELECT count(*), coalesce(sum(detector_event_count), 0) FROM google_shot"
     ).fetchone()
 
 
@@ -160,7 +169,7 @@ def _before_state(connection):
     ["event_count", "padding", "length"],
 )
 def test_bad_silver_is_rejected_and_previous_version_survives(connection, corrupt):
-    gold.load_gold(connection, *_silver_tables([_experiment_row()], _shot_rows(GOOD_BITS)))
+    _load(connection, [_experiment_row()], _shot_rows(GOOD_BITS))
     before = _before_state(connection)
 
     shots = _shot_rows(GOOD_BITS)
@@ -174,24 +183,24 @@ def test_bad_silver_is_rejected_and_previous_version_survives(connection, corrup
         shots[1]["detector_event_count"] = 0
 
     with pytest.raises((gold.GoldLoadError, psycopg.errors.CheckViolation)):
-        gold.load_gold(connection, *_silver_tables([_experiment_row()], shots))
+        _load(connection, [_experiment_row()], shots)
     assert _before_state(connection) == before
 
 
 def test_shot_count_must_match_experiment(connection):
     with pytest.raises(gold.GoldLoadError):
-        gold.load_gold(connection, *_silver_tables([_experiment_row(shots=5)], _shot_rows(GOOD_BITS)))
+        _load(connection, [_experiment_row(shots=5)], _shot_rows(GOOD_BITS))
 
 
 def test_constraints_reject_invalid_rows(connection):
-    gold.load_gold(connection, *_silver_tables([_experiment_row()], _shot_rows(GOOD_BITS)))
+    _load(connection, [_experiment_row()], _shot_rows(GOOD_BITS))
     with pytest.raises(psycopg.errors.ForeignKeyViolation):
         connection.execute(
-            "INSERT INTO gold.google_shot_prediction VALUES (%s, 0, 99, true)", (EXPERIMENT,)
+            "INSERT INTO google_shot_prediction VALUES (%s, 0, 99, true)", (EXPERIMENT,)
         )
     with pytest.raises(psycopg.errors.UniqueViolation):
         connection.execute(
-            "INSERT INTO gold.google_shot_prediction VALUES (%s, 0, 1, true)", (EXPERIMENT,)
+            "INSERT INTO google_shot_prediction VALUES (%s, 0, 1, true)", (EXPERIMENT,)
         )
     with pytest.raises(psycopg.errors.CheckViolation):
-        connection.execute("UPDATE gold.google_experiment SET distance = 4")
+        connection.execute("UPDATE google_experiment SET distance = 4")

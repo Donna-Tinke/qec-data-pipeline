@@ -9,7 +9,7 @@ SELECT e.distance,
        count(*) FILTER (WHERE o.is_logical_error)       AS decoder_mistakes,
        round(avg(o.is_logical_error::int), 5)           AS decoder_error_rate,
        round(avg(o.actual_observable_flip::int), 5)     AS actual_flip_rate
-FROM gold.v_google_decoder_outcome o
-JOIN gold.google_experiment e USING (experiment_id)
+FROM v_google_decoder_outcome o
+JOIN google_experiment e USING (experiment_id)
 GROUP BY e.distance, e.center_row, e.center_col, o.decoder_name
 ORDER BY e.distance, e.center_row, e.center_col, o.decoder_name;

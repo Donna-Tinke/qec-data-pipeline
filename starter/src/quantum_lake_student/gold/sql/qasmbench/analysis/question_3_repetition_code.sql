@@ -19,13 +19,13 @@ SELECT
     cc.condition_register,
     cc.condition_value,
     cc.gate AS recovery_gate
-FROM gold.circuit c
-JOIN gold.stabilizer_check s
+FROM circuit c
+JOIN stabilizer_check s
     ON c.circuit_id = s.circuit_id
-JOIN gold.stabilizer_data_qubit dq
+JOIN stabilizer_data_qubit dq
     ON s.circuit_id = dq.circuit_id
    AND s.check_id = dq.check_id
-JOIN gold.conditional_correction cc
+JOIN conditional_correction cc
     ON c.circuit_id = cc.circuit_id
    AND dq.data_qubit = cc.target_qubit
 WHERE c.circuit_id = 'qec_sm_n5'

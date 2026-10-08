@@ -12,12 +12,14 @@ import json
 from contextlib import nullcontext
 from pathlib import Path
 import psycopg
+from psycopg import sql
 
 from quantum_lake_student.config import Settings
 from quantum_lake_student.connections import postgres_connection
 from quantum_lake_student.models import StageResult
 from quantum_lake_student.sources.qasmbench_silver import read_lake_table
 
+GOLD_SCHEMA = "gold"
 SOURCE_NAME = "qasmbench"
 SQL_DIR = Path(__file__).parent / "sql" / SOURCE_NAME
 
@@ -27,15 +29,21 @@ def _sql(name: str) -> str:
     return (SQL_DIR / name).read_text(encoding="utf-8")
 
 
-def init_schema(conn: psycopg.Connection) -> None:
-    """Create the gold schema, tables, constraints, and indexes if they do not exist."""
-    with conn.cursor() as cur:
-        cur.execute(_sql("01_schema.sql"))
+def init_schema(conn: psycopg.Connection, *, schema: str = GOLD_SCHEMA) -> None:
+    """Create the target schema, tables, constraints, and indexes if they do not exist."""
+    with conn.transaction():
+        conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema)))
+        previous_search_path = conn.execute("SHOW search_path").fetchone()[0]
+        conn.execute(sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(schema)))
+        conn.execute(_sql("01_schema.sql"))
+        conn.execute("SELECT set_config('search_path', %s, true)", (previous_search_path,))
 
 
 def load_qasmbench_gold(
     conn: psycopg.Connection,
     settings: Settings | None = None,
+    *,
+    schema: str = GOLD_SCHEMA,
 ) -> dict[str, int]:
     """Read QASMBench Silver Parquet tables from MinIO and load them atomically into PostgreSQL Gold.
 
@@ -45,10 +53,7 @@ def load_qasmbench_gold(
     if settings is None:
         settings = Settings.from_environment()
 
-    # 1. Ensure DDL exists
-    init_schema(conn)
-
-    # 2. Read Silver Parquet tables
+    # 1. Read Silver Parquet tables
     circuit_table = read_lake_table("silver/qasmbench/circuit.parquet", settings)
     stab_table = read_lake_table("silver/qasmbench/stabilizer_check.parquet", settings)
     cond_table = read_lake_table("silver/qasmbench/conditional_correction.parquet", settings)
@@ -65,10 +70,15 @@ def load_qasmbench_gold(
         "conditional_correction": 0,
     }
 
-    # 3. Load within an atomic transaction
+    # 2. Load DDL and data within an atomic transaction
     with conn.transaction():
+        conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema)))
+        previous_search_path = conn.execute("SHOW search_path").fetchone()[0]
+        conn.execute(sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(schema)))
+        conn.execute(_sql("01_schema.sql"))
+
         with conn.cursor() as cur:
-            # 3a. Populate gold.circuit & gold.circuit_register
+            # 2a. Populate circuit & circuit_register
             for row in circuit_rows:
                 reg_decl = row["register_declarations"]
                 if isinstance(reg_decl, str):
@@ -78,7 +88,7 @@ def load_qasmbench_gold(
 
                 cur.execute(
                     """
-                    INSERT INTO gold.circuit (
+                    INSERT INTO circuit (
                         circuit_id, benchmark_name, variant, qubit_count,
                         measurement_count, two_qubit_gate_count, source_record_id
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -102,12 +112,12 @@ def load_qasmbench_gold(
                 )
                 counts["circuit"] += 1
 
-                # Normalize registers into gold.circuit_register
+                # Normalize registers into circuit_register
                 for reg_type, regs in [("qreg", reg_decl_dict.get("qregs", {})), ("creg", reg_decl_dict.get("cregs", {}))]:
                     for reg_name, size in regs.items():
                         cur.execute(
                             """
-                            INSERT INTO gold.circuit_register (
+                            INSERT INTO circuit_register (
                                 circuit_id, register_name, register_type, size
                             ) VALUES (%s, %s, %s, %s)
                             ON CONFLICT (circuit_id, register_name) DO UPDATE SET
@@ -118,11 +128,11 @@ def load_qasmbench_gold(
                         )
                         counts["circuit_register"] += 1
 
-            # 3b. Populate gold.stabilizer_check & gold.stabilizer_data_qubit
+            # 2b. Populate stabilizer_check & stabilizer_data_qubit
             for row in stab_rows:
                 cur.execute(
                     """
-                    INSERT INTO gold.stabilizer_check (
+                    INSERT INTO stabilizer_check (
                         circuit_id, check_id, ancilla_qubit, syndrome_bit, source_record_id
                     ) VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (circuit_id, check_id) DO UPDATE SET
@@ -140,12 +150,12 @@ def load_qasmbench_gold(
                 )
                 counts["stabilizer_check"] += 1
 
-                # Normalize data qubits into gold.stabilizer_data_qubit
+                # Normalize data qubits into stabilizer_data_qubit
                 d_qubits = row.get("data_qubits", [])
                 for dq in d_qubits:
                     cur.execute(
                         """
-                        INSERT INTO gold.stabilizer_data_qubit (
+                        INSERT INTO stabilizer_data_qubit (
                             circuit_id, check_id, data_qubit
                         ) VALUES (%s, %s, %s)
                         ON CONFLICT (circuit_id, check_id, data_qubit) DO NOTHING;
@@ -154,11 +164,11 @@ def load_qasmbench_gold(
                     )
                     counts["stabilizer_data_qubit"] += 1
 
-            # 3c. Populate gold.conditional_correction using natural domain key
+            # 2c. Populate conditional_correction using natural domain key
             for row in cond_rows:
                 cur.execute(
                     """
-                    INSERT INTO gold.conditional_correction (
+                    INSERT INTO conditional_correction (
                         circuit_id, condition_register, condition_value,
                         target_qubit, gate, source_record_id
                     ) VALUES (%s, %s, %s, %s, %s, %s)
@@ -177,6 +187,8 @@ def load_qasmbench_gold(
                 )
                 counts["conditional_correction"] += 1
 
+        conn.execute("SELECT set_config('search_path', %s, true)", (previous_search_path,))
+
     return counts
 
 
@@ -184,6 +196,8 @@ def run(
     run_id: str,
     settings: Settings | None = None,
     conn: psycopg.Connection | None = None,
+    *,
+    schema: str = GOLD_SCHEMA,
 ) -> StageResult:
     """Execute QASMBench Gold schema initialization and loading as a pipeline stage."""
     if settings is None:
@@ -193,7 +207,7 @@ def run(
 
     conn_ctx = nullcontext(conn) if conn is not None else postgres_connection(settings)
     with conn_ctx as connection:
-        counts = load_qasmbench_gold(connection, settings=settings)
+        counts = load_qasmbench_gold(connection, settings=settings, schema=schema)
         result.input_count = counts.get("circuit", 0)
         result.output_count = sum(counts.values())
         result.table_counts = {

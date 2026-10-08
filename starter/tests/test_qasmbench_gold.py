@@ -54,6 +54,9 @@ def target_results_dir(tmp_path: Path) -> Path:
     return tmp_path
 
 
+TEST_SCHEMA = "gold_test"
+
+
 @pytest.fixture
 def db_conn(target_results_dir: Path):
     settings = Settings.from_environment()
@@ -61,13 +64,16 @@ def db_conn(target_results_dir: Path):
     qasmbench_silver.run("test-gold-fixture", settings=settings, results_dir=target_results_dir)
     try:
         with postgres_connection(settings) as conn:
+            conn.execute(f"CREATE SCHEMA IF NOT EXISTS {TEST_SCHEMA}")
+            conn.execute(f"SET search_path TO {TEST_SCHEMA}")
             yield conn
+            conn.execute(f"DROP SCHEMA IF EXISTS {TEST_SCHEMA} CASCADE")
     except psycopg.OperationalError:
         pytest.skip("PostgreSQL server unreachable")
 
 
 def test_qasmbench_gold_load_and_counts(db_conn: psycopg.Connection):
-    counts = qasmbench_gold.load_qasmbench_gold(db_conn)
+    counts = qasmbench_gold.load_qasmbench_gold(db_conn, schema=TEST_SCHEMA)
 
     assert counts["circuit"] == 6
     assert counts["circuit_register"] == 16
@@ -76,36 +82,36 @@ def test_qasmbench_gold_load_and_counts(db_conn: psycopg.Connection):
     assert counts["conditional_correction"] == 6
 
     with db_conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM gold.circuit;")
+        cur.execute("SELECT count(*) FROM circuit;")
         assert cur.fetchone()[0] == 6
 
-        cur.execute("SELECT count(*) FROM gold.circuit_register;")
+        cur.execute("SELECT count(*) FROM circuit_register;")
         assert cur.fetchone()[0] == 16
 
-        cur.execute("SELECT count(*) FROM gold.stabilizer_check;")
+        cur.execute("SELECT count(*) FROM stabilizer_check;")
         assert cur.fetchone()[0] == 4
 
-        cur.execute("SELECT count(*) FROM gold.stabilizer_data_qubit;")
+        cur.execute("SELECT count(*) FROM stabilizer_data_qubit;")
         assert cur.fetchone()[0] == 8
 
-        cur.execute("SELECT count(*) FROM gold.conditional_correction;")
+        cur.execute("SELECT count(*) FROM conditional_correction;")
         assert cur.fetchone()[0] == 6
 
 
 def test_qasmbench_gold_idempotence(db_conn: psycopg.Connection):
-    counts1 = qasmbench_gold.load_qasmbench_gold(db_conn)
-    counts2 = qasmbench_gold.load_qasmbench_gold(db_conn)
+    counts1 = qasmbench_gold.load_qasmbench_gold(db_conn, schema=TEST_SCHEMA)
+    counts2 = qasmbench_gold.load_qasmbench_gold(db_conn, schema=TEST_SCHEMA)
 
     assert counts1 == counts2
 
     with db_conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM gold.circuit;")
+        cur.execute("SELECT count(*) FROM circuit;")
         assert cur.fetchone()[0] == 6
 
 
 def test_part1_question_3_analysis(db_conn: psycopg.Connection, target_results_dir: Path):
     """Test Part I Question 3 SQL queries and reproducible CSV export."""
-    qasmbench_gold.load_qasmbench_gold(db_conn)
+    qasmbench_gold.load_qasmbench_gold(db_conn, schema=TEST_SCHEMA)
 
     # Execute analysis pipeline and generate both CSV outputs
     output_csv = qasmbench_gold.run_analyses(db_conn, output_dir=target_results_dir)
@@ -154,7 +160,7 @@ def test_part1_question_3_analysis(db_conn: psycopg.Connection, target_results_d
 
 def test_qasmbench_gold_stage_run(db_conn: psycopg.Connection):
     settings = Settings.from_environment()
-    stage_res = qasmbench_gold.run("test-gold-stage-run", settings=settings)
+    stage_res = qasmbench_gold.run("test-gold-stage-run", settings=settings, conn=db_conn, schema=TEST_SCHEMA)
 
     assert stage_res.stage == "gold.qasmbench"
     assert stage_res.run_id == "test-gold-stage-run"

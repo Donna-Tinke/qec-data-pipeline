@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+from psycopg import sql
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -28,6 +29,7 @@ from quantum_lake_student.ml import (
 )
 from quantum_lake_student.models import StageResult
 
+GOLD_SCHEMA = "gold"
 SQL_DIR = Path(__file__).parent / "sql" / "google_qec"
 ML_OBJECT = "ml/ml_google_decoder_example.parquet"
 BATCH_ROWS = 10_000
@@ -131,18 +133,24 @@ def load_gold(
     connection: psycopg.Connection,
     experiments_table: pa.Table,
     shots_table: pa.Table,
+    *,
+    schema: str = GOLD_SCHEMA,
 ) -> dict[str, int]:
-    """Replace the google_qec Gold objects atomically. Returns row counts."""
+    """Replace the google_qec Gold objects in `schema` atomically. Returns row counts."""
     shot_columns = ", ".join(f"{name} {pg_type}" for name, pg_type in SHOT_STAGING_COLUMNS)
     prediction_values = ", ".join(
         f"({decoder_id}, s.{column})" for decoder_id, column in DECODER_COLUMNS
     )
     with connection.transaction():  # one transaction: commit all or roll back all
+        connection.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema)))
+        previous_search_path = connection.execute("SHOW search_path").fetchone()[0]
+        connection.execute(sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(schema)))
+
         cursor = connection.cursor()
         cursor.execute(_sql("01_schema.sql"))
 
         experiments = _copy_parquet(
-            cursor, experiments_table, "gold.google_experiment", EXPERIMENT_COLUMNS
+            cursor, experiments_table, "google_experiment", EXPERIMENT_COLUMNS
         )
         cursor.execute("DROP TABLE IF EXISTS pg_temp.stg_shot")
         cursor.execute(f"CREATE TEMP TABLE stg_shot ({shot_columns}) ON COMMIT DROP")
@@ -150,7 +158,7 @@ def load_gold(
 
         cursor.execute(
             """
-            INSERT INTO gold.google_shot
+            INSERT INTO google_shot
                 (experiment_id, shot_index, source_record_id, detector_bits,
                  detector_event_count, actual_observable_flip)
             SELECT experiment_id, shot_index, source_record_id, detector_bits,
@@ -159,13 +167,13 @@ def load_gold(
         )
         cursor.execute(
             """
-            INSERT INTO gold.google_shot_raw
+            INSERT INTO google_shot_raw
                 (experiment_id, shot_index, measurement_bits, sweep_bits)
             SELECT experiment_id, shot_index, measurement_bits, sweep_bits FROM stg_shot"""
         )
         cursor.execute(
             f"""
-            INSERT INTO gold.google_shot_prediction
+            INSERT INTO google_shot_prediction
                 (experiment_id, shot_index, decoder_id, predicted_flip)
             SELECT s.experiment_id, s.shot_index, v.decoder_id, v.predicted_flip
             FROM stg_shot s
@@ -173,8 +181,8 @@ def load_gold(
         )
         bad_length = cursor.execute(
             """
-            SELECT count(*) FROM gold.google_shot s
-            JOIN gold.google_experiment e USING (experiment_id)
+            SELECT count(*) FROM google_shot s
+            JOIN google_experiment e USING (experiment_id)
             WHERE octet_length(s.detector_bits) <> (e.detector_count + 7) / 8"""
         ).fetchone()[0]
         if bad_length:  # must precede get_bit(), which fails obscurely on short rows
@@ -182,11 +190,11 @@ def load_gold(
         # bytea bits are numbered like Stim b8 (bit i = byte i/8, bit i%8 from the LSB)
         cursor.execute(
             """
-            INSERT INTO gold.google_detector_position_stat
+            INSERT INTO google_detector_position_stat
                 (experiment_id, detector_index, shots_observed, fired_count)
             SELECT s.experiment_id, g.i, count(*), sum(get_bit(s.detector_bits, g.i))
-            FROM gold.google_shot s
-            JOIN gold.google_experiment e USING (experiment_id)
+            FROM google_shot s
+            JOIN google_experiment e USING (experiment_id)
             CROSS JOIN LATERAL generate_series(0, e.detector_count - 1) AS g(i)
             GROUP BY s.experiment_id, g.i"""
         )
@@ -211,8 +219,10 @@ def load_gold(
             "google_detector_position_stat",
         ):
             counts[f"gold.{table}"] = cursor.execute(
-                f"SELECT count(*) FROM gold.{table}"
+                f"SELECT count(*) FROM {table}"
             ).fetchone()[0]
+
+        connection.execute("SELECT set_config('search_path', %s, true)", (previous_search_path,))
     return counts
 
 
@@ -228,7 +238,7 @@ def fetch_ml_examples(connection: psycopg.Connection) -> pa.Table:
                detector_bits, belief_matching_prediction,
                correlated_matching_prediction, pymatching_prediction,
                tensor_network_contraction_prediction, actual_observable_flip
-        FROM gold.v_ml_google_decoder_example
+        FROM v_ml_google_decoder_example
         ORDER BY experiment_id, shot_index
         """
     ).fetchall()
@@ -239,7 +249,7 @@ def fetch_ml_examples(connection: psycopg.Connection) -> pa.Table:
         record["data_split"] = google_data_split(record["shot_index"])
 
     table = pa.Table.from_pylist(records, schema=ML_SCHEMA)
-    gold_rows = connection.execute("SELECT count(*) FROM gold.google_shot").fetchone()[0]
+    gold_rows = connection.execute("SELECT count(*) FROM google_shot").fetchone()[0]
     if table.num_rows != gold_rows:
         raise ContractError(f"view returned {table.num_rows} rows, Gold has {gold_rows} shots")
     return table
@@ -350,8 +360,8 @@ def measure_detector_storage(
             """
             INSERT INTO detector_event_sample
             SELECT s.experiment_id, s.shot_index, g.i
-            FROM gold.google_shot s
-            JOIN gold.google_experiment e USING (experiment_id)
+            FROM google_shot s
+            JOIN google_experiment e USING (experiment_id)
             CROSS JOIN LATERAL generate_series(0, e.detector_count - 1) AS g(i)
             WHERE s.shot_index < %s AND get_bit(s.detector_bits, g.i) = 1""",
             (sample_shots,),
@@ -359,7 +369,7 @@ def measure_detector_storage(
         sample_events, sampled_shots = connection.execute(
             """
             SELECT (SELECT count(*) FROM detector_event_sample),
-                   (SELECT count(*) FROM gold.google_shot WHERE shot_index < %s)""",
+                   (SELECT count(*) FROM google_shot WHERE shot_index < %s)""",
             (sample_shots,),
         ).fetchone()
         sample_bytes = connection.execute(
@@ -370,14 +380,14 @@ def measure_detector_storage(
             SELECT count(*), sum(detector_event_count),
                    sum(pg_column_size(detector_bits)), sum(octet_length(detector_bits)),
                    sum(e.detector_count)
-            FROM gold.google_shot s JOIN gold.google_experiment e USING (experiment_id)"""
+            FROM google_shot s JOIN google_experiment e USING (experiment_id)"""
         ).fetchone()
         table_sizes = dict(
             connection.execute(
                 """
                 SELECT c.relname, pg_total_relation_size(c.oid)
                 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE n.nspname = 'gold'
+                WHERE n.nspname = current_schema()
                   AND c.relname IN ('google_shot', 'google_shot_raw',
                                     'google_shot_prediction', 'google_detector_position_stat')"""
             ).fetchall()
@@ -415,6 +425,8 @@ def run(
     run_id: str,
     settings: Settings | None = None,
     connection: psycopg.Connection | None = None,
+    *,
+    schema: str = GOLD_SCHEMA,
 ) -> StageResult:
     if settings is None:
         settings = Settings.from_environment()
@@ -423,7 +435,7 @@ def run(
     experiments_table, shots_table = read_silver_tables(settings)
     conn_ctx = nullcontext(connection) if connection is not None else postgres_connection(settings)
     with conn_ctx as conn:
-        counts = load_gold(conn, experiments_table, shots_table)
+        counts = load_gold(conn, experiments_table, shots_table, schema=schema)
     result.input_count = counts["silver_shots"]
     result.output_count = counts["gold.google_shot"]
     result.table_counts = {
@@ -457,9 +469,9 @@ def trace_example(connection: psycopg.Connection, results_dir: Path) -> dict[str
                r.measurement_bits, r.sweep_bits,
                s.belief_matching_prediction, s.correlated_matching_prediction,
                s.pymatching_prediction, s.tensor_network_contraction_prediction
-        FROM gold.v_ml_google_decoder_example s
-        JOIN gold.google_experiment e USING (experiment_id)
-        JOIN gold.google_shot_raw r USING (experiment_id, shot_index)
+        FROM v_ml_google_decoder_example s
+        JOIN google_experiment e USING (experiment_id)
+        JOIN google_shot_raw r USING (experiment_id, shot_index)
         WHERE s.shot_index % 2 = 1
         ORDER BY s.shot_index
         LIMIT 1
@@ -479,8 +491,8 @@ def trace_example(connection: psycopg.Connection, results_dir: Path) -> dict[str
     cursor.execute(
         """
         SELECT p.experiment_id, p.shot_index, p.decoder_id, d.decoder_name, p.predicted_flip
-        FROM gold.google_shot_prediction p
-        JOIN gold.decoder d USING (decoder_id)
+        FROM google_shot_prediction p
+        JOIN decoder d USING (decoder_id)
         WHERE p.experiment_id = %s AND p.shot_index = %s
         ORDER BY p.decoder_id
         """,
