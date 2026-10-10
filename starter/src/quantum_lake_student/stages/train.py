@@ -369,46 +369,145 @@ def write_json(name: str, value) -> None:
 
 
 def write_report(metrics) -> None:
-    a = metrics["task_a"]["weighted_logistic_regression"]
-    c = metrics["task_c"]["raw_detector_mlp"]
-    lines = [
-        "# Part II QEC decoder report",
-        "",
-        "Task A uses the 16 ordered syndrome bits and physical sample weights.",
-        f"Weighted logistic test logical-error rate: {a['logical_error_rate']:.6f}.",
-        f"Weighted logistic balanced accuracy: {a['balanced_accuracy']:.6f}.",
-        "",
-        "Task B is evaluated separately for distance 3 and distance 5. The combined",
-        "model uses only normalized detector-event density and the four supplied",
-        "decoder predictions. Supplied decoder Brier scores are N/A because they",
-        "provide binary predictions rather than probabilities.",
-        "",
-    ]
-    for d in (3, 5):
-        b = metrics["task_b"][f"distance_{d}"]
-        o = b["mistake_overlap"]
-        lines += [
-            f"## Distance {d}",
-            f"Combined logical-error rate: {b['combined_logistic_regression']['logical_error_rate']:.6f}.",
-            f"All four decoders wrong: {o['all_four_wrong_rate']:.6f}.",
-            f"At least one decoder wrong: {o['at_least_one_wrong_rate']:.6f}.",
-            f"Decoder prediction disagreement: {o['decoder_prediction_disagreement_rate']:.6f}.",
-            "The decoders do not make perfectly identical predictions, so the combined",
-            "linear model can use some complementary information.",
-            "",
-        ]
-    lines += [
-        "## Raw-detector prototype",
-        f"MLP logical-error rate: {c['logical_error_rate']:.6f}.",
-        f"Training time: {c['training_seconds']:.3f} s.",
-        f"Prediction time: {c['prediction_seconds']:.3f} s.",
-        "The flat 200-bit vector does not explicitly encode detector position,",
-        "neighborhood structure, or changes over QEC rounds. This limits the MLP.",
-        "",
-        "Models are fitted only on training data, thresholds are chosen only from",
-        "validation data, and final metrics use only the supplied test split.",
-    ]
-    (RESULTS_DIR / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    task_a = metrics["task_a"]
+    prior = task_a["weighted_prior"]
+    logistic = task_a["weighted_logistic_regression"]
+
+    d3 = metrics["task_b"]["distance_3"]
+    d5 = metrics["task_b"]["distance_5"]
+
+    mlp = metrics["task_c"]["raw_detector_mlp"]
+
+    report = f"""# Part II QEC decoder report
+
+## Inputs and evaluation
+
+Part II uses the two ML tables produced in Part I. The syndrome table contains
+75,598 aggregated examples representing 70 million physical observations. The
+Google table contains 250,000 hardware shots.
+
+The supplied train, validation and test splits were used without modification.
+For the syndrome task, the physical sample weights were used during training
+and evaluation. Thresholds were selected using only validation data, while the
+test split was used for the final evaluation.
+
+## Task A - Weighted syndrome decoder
+
+For the syndrome task, we compared a weighted prior baseline with a weighted
+logistic regression model. The model uses the 16 ordered syndrome bits as
+input features.
+
+The positive logical-error proportion in the weighted training data was
+{prior["train_positive_prior"]:.4f}. The prior baseline achieved a
+logical-error rate of {prior["logical_error_rate"]:.5f}, balanced accuracy of
+{prior["balanced_accuracy"]:.5f}, and Brier score of
+{prior["brier_score"]:.5f}.
+
+The weighted logistic regression achieved a logical-error rate of
+{logistic["logical_error_rate"]:.5f}, balanced accuracy of
+{logistic["balanced_accuracy"]:.5f}, and Brier score of
+{logistic["brier_score"]:.5f}. The validation threshold selected for this model
+was {logistic["threshold"]:.2f}.
+
+The logistic regression has a higher logical-error rate than the prior
+baseline, but its balanced accuracy is clearly better. This happens because
+the dataset is imbalanced. A majority-based prediction can obtain a low total
+error while performing poorly on the minority class. Therefore, balanced
+accuracy is useful together with logical-error rate for this task.
+
+## Task B - Google decoder comparison
+
+The Google experiments were evaluated separately for distance 3 and distance 5.
+For each distance, we compared a majority baseline, the four supplied decoders,
+and a combined logistic regression model. The combined model uses five
+features: normalized detector-event density and the predictions of the four
+supplied decoders.
+
+### Distance 3
+
+The majority baseline obtained a logical-error rate of
+{d3["majority_prior"]["logical_error_rate"]:.5f}.
+
+The supplied decoder logical-error rates were:
+
+- belief matching: {d3["belief_matching"]["logical_error_rate"]:.5f}
+- correlated matching: {d3["correlated_matching"]["logical_error_rate"]:.5f}
+- PyMatching: {d3["pymatching"]["logical_error_rate"]:.5f}
+- tensor network contraction: {d3["tensor_network_contraction"]["logical_error_rate"]:.5f}
+
+The combined logistic regression obtained a logical-error rate of
+{d3["combined_logistic_regression"]["logical_error_rate"]:.5f} and balanced
+accuracy of {d3["combined_logistic_regression"]["balanced_accuracy"]:.5f}.
+
+The supplied decoders disagreed on
+{d3["mistake_overlap"]["decoder_prediction_disagreement_rate"]:.5f} of the test
+shots. All four were wrong together on
+{d3["mistake_overlap"]["all_four_wrong_rate"]:.5f} of the shots. This shows
+that the decoders do not always make the same mistakes and can contain
+different information.
+
+### Distance 5
+
+The majority baseline obtained a logical-error rate of
+{d5["majority_prior"]["logical_error_rate"]:.5f}.
+
+The supplied decoder logical-error rates were:
+
+- belief matching: {d5["belief_matching"]["logical_error_rate"]:.5f}
+- correlated matching: {d5["correlated_matching"]["logical_error_rate"]:.5f}
+- PyMatching: {d5["pymatching"]["logical_error_rate"]:.5f}
+- tensor network contraction: {d5["tensor_network_contraction"]["logical_error_rate"]:.5f}
+
+The combined logistic regression obtained a logical-error rate of
+{d5["combined_logistic_regression"]["logical_error_rate"]:.5f} and balanced
+accuracy of {d5["combined_logistic_regression"]["balanced_accuracy"]:.5f}.
+
+The supplied decoders disagreed on
+{d5["mistake_overlap"]["decoder_prediction_disagreement_rate"]:.5f} of the test
+shots, while all four were wrong together on
+{d5["mistake_overlap"]["all_four_wrong_rate"]:.5f} of the shots.
+
+For both distances, the combined model performs much better than the majority
+baseline. However, tensor network contraction is slightly better than the
+combined model on the final test data. This is still a valid result because
+the goal of Part II is to demonstrate a correct and repeatable ML pipeline,
+not to outperform the supplied decoders.
+
+## Task C - Raw detector prototype
+
+For the raw-detector experiment, we used only distance-3 examples with
+`shot_index < 12500`, as required. Each example contains 200 unpacked detector
+bits.
+
+The small MLP achieved a logical-error rate of
+{mlp["logical_error_rate"]:.5f}, balanced accuracy of
+{mlp["balanced_accuracy"]:.5f}, and Brier score of
+{mlp["brier_score"]:.5f}. Training took approximately
+{mlp["training_seconds"]:.3f} seconds and prediction took approximately
+{mlp["prediction_seconds"]:.3f} seconds.
+
+The result is close to random classification. A limitation of this model is
+that a flat vector of 200 detector bits does not explicitly show detector
+positions, neighbourhood relationships, or changes across QEC rounds.
+Therefore, the model cannot directly use this structure. The goal of this
+experiment was only to show that the prepared raw detector data can be
+consumed by an ML model.
+
+## Reproducibility
+
+The Part II pipeline records the random seed, dependency versions, hashes of
+the two input Parquet files, feature order, split rules and timings. It also
+saves the fitted models, predictions and metrics under `results/part2/`.
+
+Automated tests check the ML schemas, split rules, syndrome weights,
+little-endian detector-bit order, detector event counts, feature order,
+repeatability and metric calculation.
+"""
+
+    (RESULTS_DIR / "report.md").write_text(
+        report,
+        encoding="utf-8",
+    )
 
 
 def run(model_run_id: str) -> StageResult:
