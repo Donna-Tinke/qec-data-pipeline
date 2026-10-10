@@ -87,6 +87,10 @@ def run(
     # 3. Run all three Part I SQL analyses against committed PostgreSQL Gold
     run_gold_analyses(settings, r_dir / "analysis")
 
+    result.table_counts = {
+        "ml.ml_google_decoder_example": google_count,
+        "ml.ml_syndrome_decoder_example": syndrome_count,
+    }
     result.input_count = google_count + syndrome_count
     result.output_count = google_count + syndrome_count
 

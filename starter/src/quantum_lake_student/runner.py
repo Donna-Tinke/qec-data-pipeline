@@ -26,68 +26,14 @@ from quantum_lake_student.stages.register_sources import bronze_run_facts
 
 def get_code_revision() -> str:
     """Retrieve current Git commit revision hash."""
-    # 1. Environment variable override
-    for var in ("CODE_REVISION", "GIT_REVISION"):
-        val = os.environ.get(var)
-        if val and val.strip():
-            return val.strip()
-
-    # 2. File fallback (.git_revision in workspace or parent directory)
-    for candidate in (
-        Path(".git_revision"),
-        Path(__file__).resolve().parents[2] / ".git_revision",
-        Path(__file__).resolve().parents[3] / ".git_revision",
-        Path("results/part1/.git_revision"),
-    ):
-        if candidate.exists():
-            try:
-                content = candidate.read_text(encoding="utf-8").strip()
-                if content:
-                    return content
-            except Exception:
-                pass
-
-    # 3. Direct inspection of .git directory (pure Python, works without git CLI installed)
-    for git_dir in (
-        Path(".git"),
-        Path(__file__).resolve().parents[2] / ".git",
-        Path(__file__).resolve().parents[3] / ".git",
-    ):
-        if git_dir.exists():
-            try:
-                head_file = git_dir / "HEAD"
-                if head_file.exists():
-                    head_content = head_file.read_text(encoding="utf-8").strip()
-                    if not head_content.startswith("ref:"):
-                        return head_content
-                    ref_subpath = head_content.split(":", 1)[1].strip()
-                    ref_file = git_dir / ref_subpath
-                    if ref_file.exists():
-                        return ref_file.read_text(encoding="utf-8").strip()
-                    packed = git_dir / "packed-refs"
-                    if packed.exists():
-                        for line in packed.read_text(encoding="utf-8").splitlines():
-                            if line and not line.startswith(("#", "^")):
-                                parts = line.strip().split()
-                                if len(parts) == 2 and parts[1] == ref_subpath:
-                                    return parts[0]
-            except Exception:
-                pass
-
-    # 4. Git CLI fallback if available in PATH
+    if os.getenv("CODE_REVISION"):
+        return os.environ["CODE_REVISION"]
     try:
-        res = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if res.returncode == 0 and res.stdout.strip():
-            return res.stdout.strip()
-    except Exception:
-        pass
-
-    return "unknown"
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unavailable-in-container"
 
 
 def generate_trace_examples(
@@ -124,17 +70,22 @@ def generate_trace_examples(
 def collect_row_counts(
     prepare_result: StageResult | None = None,
     load_postgres_result: StageResult | None = None,
+    build_ml_result: StageResult | None = None,
 ) -> dict[str, Any]:
-    """Reconcile read, accepted, rejected, and loaded output table rows across Silver and Gold."""
+    """Reconcile read, accepted, rejected, and loaded output table rows across Silver, Gold, and ML."""
     # 1. Silver Tables (Reconciled facts provided directly by source ingestion stages)
-    silver_tables: dict[str, Any] = dict(prepare_result.table_counts) if prepare_result else {}
+    silver_tables: dict[str, Any] = dict(prepare_result.table_counts) if prepare_result and prepare_result.table_counts else {}
 
     # 2. Gold PostgreSQL Table Counts (Provided directly by relational load stage)
-    gold_counts: dict[str, Any] = dict(load_postgres_result.table_counts) if load_postgres_result else {}
+    gold_counts: dict[str, Any] = dict(load_postgres_result.table_counts) if load_postgres_result and load_postgres_result.table_counts else {}
+
+    # 3. ML Parquet Tables (Exported directly from Gold)
+    ml_counts: dict[str, Any] = dict(build_ml_result.table_counts) if build_ml_result and build_ml_result.table_counts else {}
 
     return {
         "silver_tables": silver_tables,
         "gold_tables": gold_counts,
+        "ml_tables": ml_counts,
     }
 
 
@@ -172,6 +123,7 @@ def run_pipeline(settings: Settings) -> dict[str, Any]:
     row_counts_data = collect_row_counts(
         prepare_result=stages_results.get("prepare_data"),
         load_postgres_result=stages_results.get("load_postgres"),
+        build_ml_result=stages_results.get("build_ml_tables"),
     )
     trace_examples_data = generate_trace_examples(settings, results_dir)
 
