@@ -86,10 +86,10 @@ def test_other_distance_rejects_the_whole_file() -> None:
 # --- header ----------------------------------------------------------------
 
 
-def test_actual_labels_header_is_accepted_with_documented_warning() -> None:
+def test_actual_labels_header_is_accepted_without_issues() -> None:
     result = process_csv(MEMBER, make_csv(f"0,{ZERO},10000000"), input_sha256="x")
-    assert rule_ids(result) == [RULE_HEADER_DOCUMENTED]
-    assert result.issues[0].action == "kept"
+    assert rule_ids(result) == []
+    assert result.checks["header_matches_readme_label"] is False
     assert len(result.observations) == 1
 
 
@@ -98,6 +98,7 @@ def test_documented_label_header_is_also_accepted() -> None:
         MEMBER, make_csv(f"0,{ZERO},10000000", header="label,syndromes,quantity"), input_sha256="x"
     )
     assert rule_ids(result) == []
+    assert result.checks["header_matches_readme_label"] is True
     assert len(result.observations) == 1
 
 
@@ -268,10 +269,9 @@ def test_full_run_on_real_data(local_lake: tuple[Settings, Path]) -> None:
     assert all(row["quantity"] > 0 for row in rows)
     assert len({row["source_record_id"] for row in rows}) == len(rows)
 
-    # only the expected header warning, one per CSV; nothing rejected
+    # clean data produces zero issues; nothing rejected
     issue_rows = issues.to_pylist()
-    assert {row["rule_id"] for row in issue_rows} == {RULE_HEADER_DOCUMENTED}
-    assert len(issue_rows) == 7
+    assert issue_rows == []
 
     # every Silver row resolves to a Bronze trace
     trace_ids = set(trace["source_record_id"].to_pylist())

@@ -157,7 +157,7 @@ The design of the Gold tables for the QASMBench dataset, follows mostly the tabl
 
 | Layer | Table / Object | Read | Accepted / Loaded | Rejected | Reconciled |
 | --- | --- | ---: | ---: | ---: | :---: |
-| **Silver** | `qec_syndromes.syndrome_observation` | 75,598 | 75,598 (70M weighted) | 0 | Yes (7 warnings kept) |
+| **Silver** | `qec_syndromes.syndrome_observation` | 75,598 | 75,598 (70M weighted) | 0 | Yes |
 | **Silver** | `google_qec.experiment` | 5 | 5 | 0 | Yes |
 | **Silver** | `google_qec.shot` | 250,000 | 250,000 | 0 | Yes |
 | **Silver** | `qasmbench.circuit` | 6 | 6 | 0 | Yes |

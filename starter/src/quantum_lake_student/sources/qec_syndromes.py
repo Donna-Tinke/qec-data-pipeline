@@ -305,18 +305,8 @@ def process_csv(member: str, data: bytes, *, input_sha256: str) -> CsvResult:
     header = tuple(next(csv.reader([lines[0]]))) if lines else ()
     header = tuple(column.strip() for column in header)
     checks["header"] = list(header)
-    if header == ACTUAL_HEADER:
-        # expected: the data disagrees with its README; we keep using the real header
-        result.issues.append(
-            _file_issue(
-                RULE_HEADER_DOCUMENTED, Severity.WARNING, member,
-                "README documents a 'label' column but the CSV header uses 'labels'; "
-                "the actual header is used",
-                observed_value=lines[0],
-                action=ACTION_KEPT,
-            )
-        )
-    elif header != DOCUMENTED_HEADER:
+    checks["header_matches_readme_label"] = header == DOCUMENTED_HEADER
+    if header not in (ACTUAL_HEADER, DOCUMENTED_HEADER):
         return reject_file(
             _file_issue(
                 RULE_HEADER, Severity.ERROR, member,
