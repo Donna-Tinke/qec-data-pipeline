@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import zipfile
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 from quantum_lake_student.config import Settings
 from quantum_lake_student.connections import bronze_inventory, minio_client
 from quantum_lake_student.models import StageResult, stable_record_hash
+
+MANIFEST_MINIO_OBJECT = "metadata/course-release/bundle-manifest.json"
 
 
 @dataclass(frozen=True)
@@ -26,33 +30,56 @@ class ExpectedSource:
     bytes: int
 
 
-EXPECTED_SOURCES = (
-    ExpectedSource(
-        source="qasmbench",
-        bronze_object="bronze/source=qasmbench/qasmbench-qec.zip",
-        sha256="60307f88e34b1f752b94223d6d136da72c629b4b625ac6d1c30e5e2e4f85722a",
-        bytes=144_172,
-    ),
-    ExpectedSource(
-        source="qec_syndromes",
-        bronze_object="bronze/source=qec_syndromes/syndromes_dataset.zip",
-        sha256="bdfce36a71f04295ac78fb372d9c2e381801c05e3be119f919750ef59026d072",
-        bytes=358_017,
-    ),
-    ExpectedSource(
-        source="google_qec",
-        bronze_object="bronze/source=google_qec/google-surface-code-curated.zip",
-        sha256="5d6a24f89f055883a49910979490be4baef54d28bf9a0f8e096a1d6c46d1ea56",
-        bytes=14_638_673,
-    ),
-)
-
-
 def canonical_bronze_path(path: str) -> str:
     """Treat the local release raw/ prefix as equivalent to bronze/."""
     if path.startswith("raw/"):
         return "bronze/" + path.removeprefix("raw/")
     return path
+
+
+def load_bundle_manifest(settings: Settings) -> dict[str, Any]:
+    """Load the course-supplied bundle-manifest.json from MinIO or local release."""
+    if settings.lake_backend == "minio":
+        raw_bytes = read_source_object(settings, MANIFEST_MINIO_OBJECT)
+        return json.loads(raw_bytes.decode("utf-8"))
+
+    candidates = (
+        settings.local_lake_root / "metadata" / "bundle-manifest.json",
+        settings.local_lake_root / "metadata" / "course-release" / "bundle-manifest.json",
+        Path("/course-data/metadata/bundle-manifest.json"),
+        Path(__file__).resolve().parents[4]
+        / "datasets"
+        / "student-bundle"
+        / "core"
+        / "metadata"
+        / "bundle-manifest.json",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return json.loads(candidate.read_text(encoding="utf-8"))
+
+    raise FileNotFoundError(
+        f"Could not find bundle-manifest.json under {settings.local_lake_root}"
+    )
+
+
+def expected_sources(
+    settings: Settings,
+    manifest: dict[str, Any] | None = None,
+) -> tuple[ExpectedSource, ...]:
+    """Parse expected Bronze sources and checksums from bundle-manifest.json."""
+    if manifest is None:
+        manifest = load_bundle_manifest(settings)
+
+    return tuple(
+        ExpectedSource(
+            source=obj["source"],
+            bronze_object=canonical_bronze_path(obj["path"]),
+            sha256=obj["sha256"],
+            bytes=int(obj["bytes"]),
+        )
+        for obj in manifest["objects"]
+    )
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -149,17 +176,19 @@ def read_source_object(
 
 def verified_source_metadata(
     settings: Settings,
+    manifest: dict[str, Any] | None = None,
 ) -> list[dict[str, object]]:
     """
-    Verify all three inputs and return deterministic metadata.
+    Verify all three inputs against bundle-manifest.json and return deterministic metadata.
 
     This metadata can later be reused in run.json and source tracing.
     """
+    expected_list = expected_sources(settings, manifest=manifest)
     inventory = _inventory_lookup(settings)
 
     expected_paths = {
         source.bronze_object
-        for source in EXPECTED_SOURCES
+        for source in expected_list
     }
 
     actual_paths = set(inventory)
@@ -179,7 +208,7 @@ def verified_source_metadata(
 
     rows: list[dict[str, object]] = []
 
-    for expected in EXPECTED_SOURCES:
+    for expected in expected_list:
         stored_path, observed_size = inventory[
             expected.bronze_object
         ]
@@ -242,9 +271,13 @@ def bronze_run_facts(
     settings: Settings,
 ) -> dict[str, object]:
     """Return Bronze metadata for the Part I run record."""
-    sources = verified_source_metadata(settings)
+    manifest = load_bundle_manifest(settings)
+    sources = verified_source_metadata(settings, manifest=manifest)
 
     return {
+        "release_name": manifest.get("release_name"),
+        "bundle_version": manifest.get("bundle_version"),
+        "release_date": manifest.get("release_date"),
         "bronze_input_count": len(sources),
         "bronze_inputs": [
             {

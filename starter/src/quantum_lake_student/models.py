@@ -45,6 +45,8 @@ class StageResult:
     input_count: int = 0
     output_count: int = 0
     issue_count: int = 0
+    source_results: dict[str, StageResult] = field(default_factory=dict)
+    table_counts: dict[str, Any] = field(default_factory=dict)
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = None
 
