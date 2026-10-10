@@ -206,8 +206,8 @@ Both traces in [`results/part1/trace_examples.json`](../results/part1/trace_exam
 
 
 ### 7.3 Question 3 — Repetition-Code Circuit Mapping (4-Table Gold Join)
-- **SQL**: [`gold/sql/qasmbench/analysis/question_3_repetition_code_aggregated.sql`](../src/quantum_lake_student/gold/sql/qasmbench/analysis/question_3_repetition_code_aggregated.sql) (grouped by data qubit, 3 rows)
-- **Output**: [`results/part1/analysis/question_3_repetition_code_aggregated.csv`](../results/part1/analysis/question_3_repetition_code_aggregated.csv)
+- **SQL**: [`gold/sql/qasmbench/analysis/question_3_repetition_code.sql`](../src/quantum_lake_student/gold/sql/qasmbench/analysis/question_3_repetition_code.sql) (grouped by data qubit, 3 rows)
+- **Output**: [`results/part1/analysis/question_3_repetition_code.csv`](../results/part1/analysis/question_3_repetition_code.csv)
 
 The query joins **4 Gold tables** (`circuit c`, `stabilizer_check s`, `stabilizer_data_qubit dq`, and `conditional_correction cc`) on `c.circuit_id = 'qec_sm_n5'`:
 

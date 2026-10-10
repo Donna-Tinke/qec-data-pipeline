@@ -10,23 +10,28 @@
 --   4. gold.conditional_correction (cc)
 --
 -- Evaluated specifically on the small 5-qubit repetition code ('qec_sm_n5').
--- Returns 1NF relational mapping with 4 rows.
+-- Groups by data qubit to present a concise mapping (3 rows).
 
 SELECT
     dq.data_qubit,
-    s.ancilla_qubit,
-    s.syndrome_bit,
+    string_agg(DISTINCT s.ancilla_qubit, ', ' ORDER BY s.ancilla_qubit) AS parity_ancillas,
+    string_agg(DISTINCT s.syndrome_bit, ', ' ORDER BY s.syndrome_bit) AS syndrome_bits,
     cc.condition_register,
     cc.condition_value,
     cc.gate AS recovery_gate
 FROM circuit c
-JOIN stabilizer_check s
+JOIN stabilizer_check s 
     ON c.circuit_id = s.circuit_id
-JOIN stabilizer_data_qubit dq
-    ON s.circuit_id = dq.circuit_id
+JOIN stabilizer_data_qubit dq 
+    ON s.circuit_id = dq.circuit_id 
    AND s.check_id = dq.check_id
-JOIN conditional_correction cc
-    ON c.circuit_id = cc.circuit_id
+JOIN conditional_correction cc 
+    ON c.circuit_id = cc.circuit_id 
    AND dq.data_qubit = cc.target_qubit
 WHERE c.circuit_id = 'qec_sm_n5'
-ORDER BY dq.data_qubit, s.check_id;
+GROUP BY 
+    dq.data_qubit, 
+    cc.condition_register, 
+    cc.condition_value, 
+    cc.gate
+ORDER BY dq.data_qubit;

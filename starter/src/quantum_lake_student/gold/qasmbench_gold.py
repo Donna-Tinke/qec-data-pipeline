@@ -223,13 +223,11 @@ def run(
 # =============================================================================
 
 QUESTION_3_QUERY = _sql("analysis/question_3_repetition_code.sql").strip()
-QUESTION_3_AGGREGATED_QUERY = _sql("analysis/question_3_repetition_code_aggregated.sql").strip()
 
 
 def run_analyses(
     conn: psycopg.Connection,
     output_dir: Path | None = None,
-    write_aggregated: bool = True,
 ) -> Path:
     """Execute the Part I Question 3 SQL analysis and write results to CSV.
 
@@ -245,7 +243,6 @@ def run_analyses(
     csv_path = output_dir / "question_3_repetition_code.csv"
 
     with conn.cursor() as cur:
-        # 1. Execute standard 1NF relational query (4 rows)
         cur.execute(QUESTION_3_QUERY)
         headers = [col[0] for col in cur.description]
         rows = cur.fetchall()
@@ -254,16 +251,5 @@ def run_analyses(
             writer = csv.writer(f)
             writer.writerow(headers)
             writer.writerows(rows)
-
-        # 2. Optionally write aggregated report (3 rows)
-        if write_aggregated:
-            agg_path = output_dir / "question_3_repetition_code_aggregated.csv"
-            cur.execute(QUESTION_3_AGGREGATED_QUERY)
-            agg_headers = [col[0] for col in cur.description]
-            agg_rows = cur.fetchall()
-            with open(agg_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(agg_headers)
-                writer.writerows(agg_rows)
 
     return csv_path

@@ -113,10 +113,8 @@ def test_part1_question_3_analysis(db_conn: psycopg.Connection, target_results_d
     """Test Part I Question 3 SQL queries and reproducible CSV export."""
     qasmbench_gold.load_qasmbench_gold(db_conn, schema=TEST_SCHEMA)
 
-    # Execute analysis pipeline and generate both CSV outputs
     output_csv = qasmbench_gold.run_analyses(db_conn, output_dir=target_results_dir)
 
-    # 1. Verify primary relational CSV
     assert output_csv.exists()
     assert output_csv == target_results_dir / "question_3_repetition_code.csv"
 
@@ -125,37 +123,16 @@ def test_part1_question_3_analysis(db_conn: psycopg.Connection, target_results_d
 
     assert reader[0] == [
         "data_qubit",
-        "ancilla_qubit",
-        "syndrome_bit",
-        "condition_register",
-        "condition_value",
-        "recovery_gate",
-    ]
-    assert len(reader) == 5  # header + 4 rows
-    assert reader[1] == ["q[0]", "a[0]", "syn[0]", "syn", "1", "x"]
-    assert reader[2] == ["q[1]", "a[0]", "syn[0]", "syn", "3", "x"]
-    assert reader[3] == ["q[1]", "a[1]", "syn[1]", "syn", "3", "x"]
-    assert reader[4] == ["q[2]", "a[1]", "syn[1]", "syn", "2", "x"]
-
-    # 2. Verify aggregated reporting CSV
-    agg_csv = target_results_dir / "question_3_repetition_code_aggregated.csv"
-    assert agg_csv.exists()
-
-    with open(agg_csv, newline="", encoding="utf-8") as f:
-        agg_reader = list(csv.reader(f))
-
-    assert agg_reader[0] == [
-        "data_qubit",
         "parity_ancillas",
         "syndrome_bits",
         "condition_register",
         "condition_value",
         "recovery_gate",
     ]
-    assert len(agg_reader) == 4  # header + 3 rows
-    assert agg_reader[1] == ["q[0]", "a[0]", "syn[0]", "syn", "1", "x"]
-    assert agg_reader[2] == ["q[1]", "a[0], a[1]", "syn[0], syn[1]", "syn", "3", "x"]
-    assert agg_reader[3] == ["q[2]", "a[1]", "syn[1]", "syn", "2", "x"]
+    assert len(reader) == 4  # header + 3 rows
+    assert reader[1] == ["q[0]", "a[0]", "syn[0]", "syn", "1", "x"]
+    assert reader[2] == ["q[1]", "a[0], a[1]", "syn[0], syn[1]", "syn", "3", "x"]
+    assert reader[3] == ["q[2]", "a[1]", "syn[1]", "syn", "2", "x"]
 
 
 def test_qasmbench_gold_stage_run(db_conn: psycopg.Connection):
