@@ -6,6 +6,21 @@
 
 
 ### 1.2 `google_qec` (`bronze/source=google_qec/google-surface-code-curated.zip`)
+The Google archive contains 76 archive members: a top-level `README.txt` and five experiment directories, each holding the same 15 members. Four are distance-3 experiments (`surface_code_bX_d3_r25_center_3_5`, `..._5_3`, `..._5_7`, `..._7_5`) and one is a distance-5 experiment (`surface_code_bX_d5_r25_center_5_5`). All use the X logical basis, 25 rounds, and 50,000 hardware shots. The directory name encodes the basis, distance, rounds, and processor-center coordinates, and every directory contains:
+
+1. **`properties.yml`** (`278` bytes):
+   - Experiment metadata: `basis`, `distance`, `rounds`, `shots`, `center_data_qubit_row/col`, `circuit_measurements`, `circuit_sweep_bits`, `circuit_detectors`, and `circuit_qubits`.
+   - Distance-3 experiments declare `17` qubits, `209` measurements, `9` sweep bits, and `200` detectors per shot, while the distance-5 experiment declares `49` qubits, `625` measurements, `25` sweep bits, and `600` detectors per shot.
+2. **Per-shot bit-packed files (Stim `b8`)** (`measurements.b8`, `sweep.b8`, `detection_events.b8`):
+   - Records are byte-aligned and bits are little-endian within each byte. Expected file size is `ceil(bits_per_record / 8) * shots`, e.g., `27 * 50,000 = 1,350,000` bytes for `measurements.b8` in a distance-3 experiment.
+   - Raw stabilizer **measurements** are hardware outcomes, whereas **detection events** are derived from changes between measurements across space and time. They are therefore kept as separate concepts. When `bits_per_record` is not a multiple of 8 (`209` and `625` measurement bits, `9` and `25` sweep bits), the unused padding bits of the last byte must be zero.
+3. **Per-shot label and decoder files (`01`)** (`obs_flips_actual.01` plus four `obs_flips_predicted_by_{belief_matching, correlated_matching, pymatching, tensor_network_contraction}.01`):
+   - One `0`/`1` line per shot (`50,000` lines, `100,000` bytes). `obs_flips_actual.01` is the actual logical outcome (a label), whereas the four other files are decoder predictions. A decoder mistake is the disagreement between the two, not a column in the source.
+4. **Circuit and model files** (`circuit_ideal.stim`, `circuit_noisy.stim`, `circuit_detector_error_model.dem`, `pij_from_even_for_odd.dem`, `pij_from_odd_for_even.dem`, `layout.svg`):
+   - Describe the circuit, noise model and chip layout. They are not needed for any required table and are ignored by Silver, though they stay in the Bronze archive.
+
+- **What one row means**: In Silver, one `experiment` row is one experiment directory (described by `properties.yml`), and one `shot` row is one aligned hardware shot, assembled from the same line/record index across the 8 companion files (`measurements.b8`, `sweep.b8`, `detection_events.b8`, `obs_flips_actual.01`, and the 4 decoder `.01` files).
+- **Candidate identifiers**: `experiment_id` (the directory name) uniquely identifies an experiment; `(experiment_id, shot_index)` uniquely identifies a shot; and `(basis, distance, rounds, center_row, center_col)` also identifies an experiment, since the same code at a different processor location is a different experiment.
 
 
 ### 1.3 `qasmbench` (`bronze/source=qasmbench/qasmbench-qec.zip`)
@@ -102,6 +117,44 @@ From the repository root:
 - **Run Part II ML pipeline**: `make train`
 - **Run automated test suite (124 tests)**: `make test`
 
+### 2.5 Google Silver Table Construction ([`sources/google_qec.py`](../src/quantum_lake_student/sources/google_qec.py))
+`run()` and `process_experiment_dir()` process `bronze/source=google_qec/google-surface-code-curated.zip` in four deterministic steps so that every accepted experiment yields one `experiment` row and exactly `shots` aligned `shot` rows:
+
+1. **Archive Reading & Hash Capture**:
+   - Reads the Bronze ZIP from MinIO, computes its SHA-256 digest (`input_sha256`), validates member paths with `safe_member_names()`, and opens the archive in memory (`zipfile.Path`) without extracting it to disk. Every directory containing a `properties.yml` is treated as one experiment, in sorted order.
+2. **Companion-File and Metadata Checks**:
+   - `verify_companion_files()` requires all 9 files used by Silver (`properties.yml`, the three `b8` files, `obs_flips_actual.01`, and the 4 decoder `.01` files). `load_properties()` checks that the directory name matches `surface_code_b<basis>_d<distance>_r<rounds>_center_<row>_<col>`, that `properties.yml` parses to a mapping with all required keys, and that the directory name and `properties.yml` agree on basis, distance, rounds, and center.
+3. **Length, Padding & Value Validation**:
+   - For each `b8` file, `_read_packed_matrix()` computes the expected byte length from `properties.yml` (`b8_record_bytes(bits) * shots`) and checks that the unused padding bits in the last byte of every record are zero. For each `01` file, `_read_01_column()` checks that all values are `0`/`1` and that the row count equals `shots`.
+   - If any check fails for an experiment, the whole experiment is skipped (no experiment or shot rows, no partial shots) and a `QualityFinding` per failed check is written to `results/part1/data_issues.parquet`.
+4. **Shot Assembly & Packing**:
+   - For `shot_index` in `0..shots-1`, the same record index is read from all 8 companion files. Bits are re-packed with `pack_bits()` into Stim `b8` bytes (`measurement_bits`, `sweep_bits`, `detector_bits`), `detector_event_count = sum(detector_bits)`, and the actual flip and the four decoder predictions become booleans. `sweep_bits` is empty if `circuit_sweep_bits = 0`.
+   - Each experiment gets one trace row (`archive_member = "<experiment_id>/properties.yml"`) and each shot gets 8 trace rows in `results/part1/source_trace.parquet`, one per companion member, all with `record_locator = "<experiment_id>:shot=<shot_index>"`.
+
+#### `silver/google_qec/experiment.parquet` (5 rows)
+| Column | Arrow Type | Derivation Rule | Example (`surface_code_bX_d3_r25_center_3_5`) |
+| --- | --- | --- | --- |
+| `source_record_id` | `string` | `"google_qec:<experiment_id>:properties"` | `"google_qec:surface_code_bX_d3_r25_center_3_5:properties"` |
+| `experiment_id` | `string` | Experiment directory name | `"surface_code_bX_d3_r25_center_3_5"` |
+| `basis` | `string` | `basis` in `properties.yml` | `"X"` |
+| `distance` | `int32` | `distance` in `properties.yml` | `3` |
+| `rounds` | `int32` | `rounds` in `properties.yml` | `25` |
+| `shots` | `int64` | `shots` in `properties.yml` | `50000` |
+| `center_row` / `center_col` | `int32` | `center_data_qubit_row` / `center_data_qubit_col` | `3` / `5` |
+| `measurement_count` | `int32` | `circuit_measurements` | `209` |
+| `detector_count` | `int32` | `circuit_detectors` | `200` |
+
+#### `silver/google_qec/shot.parquet` (250,000 rows)
+| Column | Arrow Type | Derivation Rule | Example (`...center_3_5`, shot 1) |
+| --- | --- | --- | --- |
+| `source_record_id` | `string` | `"google_qec:<experiment_id>:shot=<shot_index>"` | `"google_qec:surface_code_bX_d3_r25_center_3_5:shot=1"` |
+| `experiment_id` | `string` | Parent experiment (`experiment.experiment_id`) | `"surface_code_bX_d3_r25_center_3_5"` |
+| `shot_index` | `int64` | Zero-based record index in the companion files | `1` |
+| `measurement_bits` / `sweep_bits` / `detector_bits` | `binary` | Packed Stim `b8` record of the shot | `27` / `2` / `25` bytes (distance 3) |
+| `detector_event_count` | `int32` | Number of set bits in `detector_bits` | `36` |
+| `actual_observable_flip` | `bool` | Line `shot_index` of `obs_flips_actual.01` | `True` |
+| `<decoder>_prediction` (4 columns) | `bool` | Line `shot_index` of `obs_flips_predicted_by_<decoder>.01` | one per decoder |
+
 ---
 
 ## 3. Gold Tables, Relationships, Keys, Constraints, and Indexes
@@ -110,6 +163,18 @@ From the repository root:
 
 
 ### 3.2 `google_qec` Gold Tables ([`gold/sql/google_qec/01_schema.sql`](../src/quantum_lake_student/gold/sql/google_qec/01_schema.sql))
+The Gold design for the Google data splits the two Silver tables by how they are used. The `shot` Silver table is divided into `google_shot` (the columns every analysis and the ML export need), `google_shot_raw` (the bulky raw bits), and `google_shot_prediction` (its four decoder-prediction columns, normalized to one row per decoder per shot, with a small `decoder` lookup table). In addition, `google_detector_position_stat` is derived at load time from the packed detector bits. Specifically the Gold design for the Google data is as follows:
+
+| Gold Table | One row represents... | Primary Key | Foreign Keys, Constraints & Indexes | Rows |
+| --- | --- | --- | --- | ---: |
+| `google_experiment` | One hardware experiment (code distance, basis, rounds, processor location). | `(experiment_id)` | `UNIQUE (source_record_id)`, `UNIQUE (basis, distance, rounds, center_row, center_col)`, `CHECK (basis IN ('X', 'Z'))`, `CHECK (distance >= 3 AND distance % 2 = 1)`, `CHECK (rounds > 0)`, `CHECK (shots > 0)`, `CHECK (measurement_count > 0)`, `CHECK (detector_count > 0)`, index on `(distance)` | 5 |
+| `decoder` | One decoder whose predictions were supplied with the data. | `(decoder_id)` | `UNIQUE (decoder_name)` | 4 |
+| `google_shot` | One aligned hardware shot: packed detector events and the actual logical flip. | `(experiment_id, shot_index)` | `FK (experiment_id) -> google_experiment`, `UNIQUE (source_record_id)`, `CHECK (shot_index >= 0)`, `CHECK (detector_event_count = bit_count(detector_bits))` | 250,000 |
+| `google_shot_raw` | The raw measurement and sweep bits of one shot (strictly 1:1 with `google_shot`). | `(experiment_id, shot_index)` | `FK (experiment_id, shot_index) -> google_shot ON DELETE CASCADE` | 250,000 |
+| `google_shot_prediction` | One decoder's predicted logical flip for one shot. | `(experiment_id, shot_index, decoder_id)` | `FK (experiment_id, shot_index) -> google_shot ON DELETE CASCADE`, `FK (decoder_id) -> decoder`, index on `(decoder_id, experiment_id)` | 1,000,000 |
+| `google_detector_position_stat` | How often one detector position fired in one experiment. | `(experiment_id, detector_index)` | `FK (experiment_id) -> google_experiment`, `CHECK (detector_index >= 0)`, `CHECK (shots_observed > 0)`, `CHECK (fired_count BETWEEN 0 AND shots_observed)` | 1,400 |
+
+Four views sit on top of these tables: `v_google_decoder_outcome` (one row per shot and decoder with the derived `is_logical_error`), `v_google_shot_predictions_wide` (the four predictions side by side), `v_google_example_lookup` (ML `example_id` $\to$ shot), and `v_ml_google_decoder_example` (the ML export).
 
 
 ### 3.3 `qasmbench` Gold Tables ([`gold/sql/qasmbench/01_schema.sql`](../src/quantum_lake_student/gold/sql/qasmbench/01_schema.sql))
@@ -138,7 +203,21 @@ The design of the Gold tables for the QASMBench dataset, follows mostly the tabl
      - **`conditional_correction` — `PRIMARY KEY (circuit_id, target_qubit, condition_register, condition_value)` + `UNIQUE (source_record_id)`**: A single classical syndrome value can trigger gates on multiple qubits, and a single target qubit can be corrected under multiple syndrome conditions. The 4-tuple `(circuit_id, target_qubit, condition_register, condition_value)` uniquely identifies each conditional recovery rule on a target qubit, while `UNIQUE (source_record_id)` enforces 1-to-1 traceability to the originating QASM `stmt_<idx>`.
 
 
+### 4.1.1 Google Gold Design Decisions
+- **Decoder mistakes are derived, not stored**: A decoder mistake is `predicted_flip <> actual_observable_flip`, computed in the view `v_google_decoder_outcome` (`is_logical_error`). Storing it would let it disagree with the two columns it comes from, and it keeps the actual label and the prediction as separate facts.
+- **Predictions are one row per decoder per shot**: `google_shot_prediction` (`PRIMARY KEY (experiment_id, shot_index, decoder_id)`) makes adding a decoder new data rather than a schema change. It costs `1M` rows (about 160 MB) and a pivot for the ML export (`v_google_shot_predictions_wide`), which is acceptable at this data size.
+- **Raw bits are kept in their own table**: Most queries only need `google_shot`, so the large `measurement_bits` and `sweep_bits` live in `google_shot_raw` (1:1, same key). Raw measurements and derived detector events stay separate concepts.
+- **Detector events are stored packed, plus a per-position summary table**: Each shot keeps one packed `bytea` (`detector_bits`), plus `google_detector_position_stat` (`1,400` rows). We measured the alternative of one row per fired detector: about `10.5M` rows and `1.9 GB`, roughly 200x larger than the packed column. The packed bytes are also exactly what the ML export needs. The downside is that finding shots where one specific detector fired requires scanning with `get_bit`, which is fine at this size. Stim `b8` and PostgreSQL `get_bit` number bits the same way, so the position statistics are computed straight from the packed bytes (tested in `test_position_stats_use_b8_bit_order`).
+- **Primary Keys, Uniqueness Constraints and identified relationships**:
+   - Keys come from the source (`experiment_id`, `shot_index`), so repeated loads produce identical keys.
+     - **`google_experiment` — `PRIMARY KEY (experiment_id)` + `UNIQUE (basis, distance, rounds, center_row, center_col)`**: The same code distance, rounds and basis at a different processor location is a different experiment (the four distance-3 experiments differ only in location), so location is part of the natural identity. `UNIQUE (source_record_id)` guarantees 1-to-1 lineage to `properties.yml`.
+     - **`google_shot` — `PRIMARY KEY (experiment_id, shot_index)`**: `shot_index` is only unique within an experiment. `CHECK (detector_event_count = bit_count(detector_bits))` keeps the duplicated count consistent with the stored bits.
+     - **`google_shot_prediction` — `PRIMARY KEY (experiment_id, shot_index, decoder_id)`**: Each decoder predicts exactly once per shot, which is enforced after load (see Section 5.1).
+- **All-or-nothing load**: DDL, `COPY`, inserts, views, and the checks in `03_checks.sql` run in one transaction and only touch `google_*`, `v_google_*`, `v_ml_google_*`, and `decoder` objects, so other sources in the `gold` schema are never affected.
+
 ### 4.2 Investigated and Rejected Relationships (with Evidence)
+- **Google experiments $\leftrightarrow$ QASMBench circuits (rejected)**: We did not link the Google experiments to the QASMBench circuits. The two sources share no field (no id, qubit layout, or device), the QASMBench circuits are 5-qubit textbook examples whereas the Google experiments are 17-qubit (distance 3) and 49-qubit (distance 5) surface codes, and the assignment states that the circuits do not identify the ones used by the Google experiments. Any join would be a guess, so the sources remain complementary rather than joinable.
+- **Storing a decoder-mistake flag in `google_shot_prediction` (rejected)**: It would duplicate information derivable from `predicted_flip` and `actual_observable_flip` and could drift from them, so it is a view instead (Section 4.1.1).
 
 
 ---
@@ -150,7 +229,7 @@ The design of the Gold tables for the QASMBench dataset, follows mostly the tabl
 - **Record-Level Checks (`results/part1/data_issues.parquet`)**:
   - **QASMBench (`qasmbench.parse_error`)**: Validates that every `.qasm` file is valid OpenQASM and declares at least one `qreg`. Malformed circuits are excluded (`action = 'exclude'`) and recorded in `data_issues.parquet` (tested in [`tests/test_qasmbench_silver.py`](../tests/test_qasmbench_silver.py)). All 6 supplied circuits pass (`0` issues).
   - **`qec_syndromes`**:
-  - **`google_qec`**:
+  - **`google_qec`**: Each experiment is validated as a unit in Silver and rejected as a whole (`action = 'rejected'`) if any check fails, so Gold never sees partial experiments (tested in [`tests/test_google_qec.py`](../tests/test_google_qec.py)). Rules: `google_qec.missing_companion_file`, `unexpected_directory_name`, `invalid_properties_file`, `properties_missing_keys`, `directory_properties_mismatch`, `b8_length_mismatch`, `b8_padding_not_zero`, `invalid_01_value`, and `01_row_count_mismatch`. All 5 experiments pass (`0` issues). Gold repeats the structural checks inside the load transaction ([`03_checks.sql`](../src/quantum_lake_student/gold/sql/google_qec/03_checks.sql)): shot count equals `google_experiment.shots`, every shot has one raw row and one prediction per decoder (4), correct `detector_bits` and `measurement_bits` byte lengths, zero padding bits, and per-position firing counts summing to `detector_event_count`. Any violation rolls back the whole Gold update (tested in [`tests/test_gold_google_qec.py`](../tests/test_gold_google_qec.py)). One issue found during development: Silver initially stored bits one byte per bit instead of packed `b8`, which was fixed with `pack_bits`.
 
 
 ### 5.2 Bronze $\to$ Silver $\to$ Gold $\to$ ML Row Count Reconciliation ([`results/part1/row_counts.json`](../results/part1/row_counts.json))
@@ -204,6 +283,11 @@ Both traces in [`results/part1/trace_examples.json`](../results/part1/trace_exam
 - **SQL**: [`gold/sql/google_qec/analysis/google_decoder_error_rates.sql`](../src/quantum_lake_student/gold/sql/google_qec/analysis/google_decoder_error_rates.sql), [`google_decoder_error_overlap.sql`](../src/quantum_lake_student/gold/sql/google_qec/analysis/google_decoder_error_overlap.sql), and [`google_detector_hotspots.sql`](../src/quantum_lake_student/gold/sql/google_qec/analysis/google_detector_hotspots.sql)
 - **Outputs**: [`results/part1/analysis/google_decoder_error_rates.json`](../results/part1/analysis/google_decoder_error_rates.json), [`google_decoder_error_overlap.json`](../results/part1/analysis/google_decoder_error_overlap.json), and [`google_detector_hotspots.json`](../results/part1/analysis/google_detector_hotspots.json)
 
+
+**Interpretation**:
+The actual logical flip is close to a coin flip (`49.3%` of shots at distance 3, `50.0%` at distance 5), so a decoder that learned nothing would be wrong about half the time.
+- **Error rates**: Pooled over the four distance-3 experiments (200,000 shots), the decoders are wrong on `40.0%` (`belief_matching`), `39.7%` (`tensor_network_contraction`), `41.9%` (`correlated_matching`), and `43.4%` (`pymatching`) of shots. At distance 5 (50,000 shots) they are wrong on `40.1%`, `39.6%`, `42.6%`, and `45.1%`. All beat the raw flip rate by only a modest margin, and decoders are only a few points apart. Between distance-3 locations the rates differ by up to about 3 points.
+- **Overlap**: At distance 3, all four decoders are right on `30.3%` of shots and all four are wrong on `14.3%` (distance 5: `24.4%` and `10.9%`). The remaining `55%` of shots (`65%` at distance 5) split the decoders, so their mistakes only partly overlap, which a combined decoder could use.
 
 ### 7.3 Question 3 — Repetition-Code Circuit Mapping (4-Table Gold Join)
 - **SQL**: [`gold/sql/qasmbench/analysis/question_3_repetition_code.sql`](../src/quantum_lake_student/gold/sql/qasmbench/analysis/question_3_repetition_code.sql) (grouped by data qubit, 3 rows)
