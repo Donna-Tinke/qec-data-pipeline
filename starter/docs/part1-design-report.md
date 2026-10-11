@@ -221,6 +221,23 @@ A row that fails any rule is excluded from Silver and written to `data_issues.pa
 | `quantity` | `int64` | `quantity`, > 0 | `141407` |
 
 ### 2.5 Reproduction Commands
+> **Pre-Generated Results & Idempotent Reproduction**:
+> All required deliverable artifacts under `starter/results/part1/` and `starter/results/part2/` are pre-generated, verified, and tracked in this submission branch. Running the pipelines is fully idempotent and safely refreshes them in place.
+>
+> If an evaluator wishes to test a **100% clean regeneration from scratch**:
+> ```bash
+> # 1. Delete existing generated results:
+> rm -rf starter/results/part1/* starter/results/part2/*
+>
+> # 2. Reset Docker volumes and re-seed clean Bronze inputs:
+> make reset-platform && make bootstrap
+>
+> # 3. Re-run pipelines and automated test suite:
+> docker compose exec workspace make run
+> docker compose exec workspace make train
+> docker compose exec workspace make test
+> ```
+
 The course platform can be reproduced end-to-end either directly from the host terminal outside Docker (recommended) or from inside the workspace container:
 
 #### Option A: From the Host Terminal (Repository Root)
