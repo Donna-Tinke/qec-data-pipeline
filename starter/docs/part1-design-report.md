@@ -221,11 +221,38 @@ A row that fails any rule is excluded from Silver and written to `data_issues.pa
 | `quantity` | `int64` | `quantity`, > 0 | `141407` |
 
 ### 2.5 Reproduction Commands
-From the repository root:
-- **Bootstrap clean environment**: `make bootstrap` (or `make reset-platform && make bootstrap` for a clean wipe)
-- **Run Part I pipeline**: `make run` (safe to run repeatedly; verified idempotent)
-- **Run Part II ML pipeline**: `make train`
-- **Run automated test suite (124 tests)**: `make test`
+The course platform can be reproduced end-to-end either directly from the host terminal outside Docker (recommended) or from inside the workspace container:
+
+#### Option A: From the Host Terminal (Repository Root)
+Run all commands from the root directory of the repository on your host machine:
+1. **Bootstrap clean environment** (starts Postgres, MinIO, Adminer, JupyterLab, and seeds bronze data):
+   ```bash
+   make bootstrap
+   ```
+   *(To wipe all Docker volumes and re-seed completely from scratch: `make reset-platform && make bootstrap`)*
+2. **Run Part I data pipeline** (Bronze $\to$ Silver $\to$ Gold $\to$ ML tables $\to$ SQL analyses $\to$ Lineage traces):
+   ```bash
+   docker compose exec workspace make run
+   ```
+   *(Safe to run repeatedly; verified idempotent without duplicate records or altered identifiers).*
+3. **Run Part II ML training pipeline** (Models $\to$ Predictions $\to$ Metrics $\to$ Report):
+   ```bash
+   docker compose exec workspace make train
+   ```
+4. **Run automated test suite** (all 124 tests across Part I & Part II):
+   ```bash
+   docker compose exec workspace make test
+   ```
+
+#### Option B: Inside the Workspace Container (JupyterLab Terminal or Container Shell)
+If you attach a shell to the workspace container (`docker compose exec workspace bash`) after bootstrapping, or use the JupyterLab terminal at `http://localhost:8888/lab` (working directory `/workspace`):
+```bash
+make check      # verify MinIO object-store and PostgreSQL connections
+make inventory  # list Bronze course archives
+make run        # execute Part I data pipeline
+make train      # execute Part II ML training pipeline
+make test       # run pytest test suite (124 tests)
+```
 
 ---
 
