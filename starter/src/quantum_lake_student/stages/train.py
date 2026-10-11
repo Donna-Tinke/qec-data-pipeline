@@ -256,12 +256,46 @@ def run_task_b(rows, distance, predictions):
     decoder_predictions = []
     for column in GOOGLE_META_PREDICTION_COLUMNS:
         start = perf_counter()
-        pred = np.asarray([r[column] for r in test], dtype=bool)
-        predict_time = perf_counter() - start
+
+        # These predictions are already supplied in the input table.
+        # We are not running the original decoder here.
+        pred = np.asarray(
+            [r[column] for r in test],
+            dtype=bool,
+        )
+
+        local_evaluation_time = perf_counter() - start
+
         decoder_predictions.append(pred)
         name = column.removesuffix("_prediction")
-        result[name] = evaluate(y_test, pred, None, None, 0.0, predict_time)
-        add_predictions(predictions, test, f"task_b_d{distance}_{name}", y_test, pred)
+
+        decoder_metrics = evaluate(
+            y_test,
+            pred,
+            None,
+            None,
+            0.0,
+            0.0,
+        )
+
+        # We did not train or run the original decoder ourselves.
+        decoder_metrics["training_seconds"] = None
+        decoder_metrics["prediction_seconds"] = None
+
+        # This only measures reading/evaluating the provided predictions.
+        decoder_metrics["local_evaluation_seconds"] = float(
+            local_evaluation_time
+        )
+
+        result[name] = decoder_metrics
+
+        add_predictions(
+            predictions,
+            test,
+            f"task_b_d{distance}_{name}",
+            y_test,
+            pred,
+        )
 
     matrix = np.column_stack(decoder_predictions)
     wrong = matrix != y_test[:, None]
@@ -317,6 +351,8 @@ def run_task_c(rows, predictions):
     start = perf_counter()
     model.fit(x_train, y_train)
     train_time = perf_counter() - start
+    iterations_used = int(model.n_iter_)
+    hit_iteration_limit = iterations_used >= int(model.max_iter)
     threshold = choose_threshold(y_val, model.predict_proba(x_val)[:, 1])
     start = perf_counter()
     prob = model.predict_proba(x_test)[:, 1]
@@ -325,6 +361,9 @@ def run_task_c(rows, predictions):
     metrics = evaluate(
         y_test, pred, prob, None, train_time, predict_time, threshold
     )
+    metrics["iterations_used"] = iterations_used
+    metrics["max_iterations"] = int(model.max_iter)
+    metrics["hit_iteration_limit"] = hit_iteration_limit
     add_predictions(
         predictions, parts["test"], "task_c_d3_raw_detector_mlp", y_test, pred, prob
     )
@@ -369,46 +408,291 @@ def write_json(name: str, value) -> None:
 
 
 def write_report(metrics) -> None:
-    a = metrics["task_a"]["weighted_logistic_regression"]
-    c = metrics["task_c"]["raw_detector_mlp"]
+    task_a = metrics["task_a"]
+    prior = task_a["weighted_prior"]
+    logistic = task_a["weighted_logistic_regression"]
+
+    d3 = metrics["task_b"]["distance_3"]
+    d5 = metrics["task_b"]["distance_5"]
+
+    mlp = metrics["task_c"]["raw_detector_mlp"]
+
+    def fmt(value, digits: int = 5) -> str:
+        if value is None:
+            return "N/A"
+        return f"{value:.{digits}f}"
+
+    def metric_row(
+        task: str,
+        model: str,
+        distance: str,
+        values: dict,
+    ) -> str:
+        return (
+            f"| {task} | {model} | {distance} | "
+            f"{fmt(values['logical_error_rate'])} | "
+            f"{fmt(values['balanced_accuracy'])} | "
+            f"{fmt(values['brier_score'])} | "
+            f"{fmt(values['training_seconds'])} | "
+            f"{fmt(values['prediction_seconds'])} |"
+        )
+
+    result_rows = [
+        metric_row(
+            "A",
+            "Weighted prior",
+            "-",
+            prior,
+        ),
+        metric_row(
+            "A",
+            "Weighted logistic regression",
+            "-",
+            logistic,
+        ),
+        metric_row(
+            "B",
+            "Majority prior",
+            "3",
+            d3["majority_prior"],
+        ),
+        metric_row(
+            "B",
+            "Belief matching",
+            "3",
+            d3["belief_matching"],
+        ),
+        metric_row(
+            "B",
+            "Correlated matching",
+            "3",
+            d3["correlated_matching"],
+        ),
+        metric_row(
+            "B",
+            "PyMatching",
+            "3",
+            d3["pymatching"],
+        ),
+        metric_row(
+            "B",
+            "Tensor network contraction",
+            "3",
+            d3["tensor_network_contraction"],
+        ),
+        metric_row(
+            "B",
+            "Combined logistic regression",
+            "3",
+            d3["combined_logistic_regression"],
+        ),
+        metric_row(
+            "B",
+            "Majority prior",
+            "5",
+            d5["majority_prior"],
+        ),
+        metric_row(
+            "B",
+            "Belief matching",
+            "5",
+            d5["belief_matching"],
+        ),
+        metric_row(
+            "B",
+            "Correlated matching",
+            "5",
+            d5["correlated_matching"],
+        ),
+        metric_row(
+            "B",
+            "PyMatching",
+            "5",
+            d5["pymatching"],
+        ),
+        metric_row(
+            "B",
+            "Tensor network contraction",
+            "5",
+            d5["tensor_network_contraction"],
+        ),
+        metric_row(
+            "B",
+            "Combined logistic regression",
+            "5",
+            d5["combined_logistic_regression"],
+        ),
+        metric_row(
+            "C",
+            "Raw detector MLP",
+            "3",
+            mlp,
+        ),
+    ]
+
+    if mlp["hit_iteration_limit"]:
+        convergence_text = (
+            f"The MLP used all {mlp['max_iterations']} configured training "
+            "iterations. In this run scikit-learn also reported a "
+            "ConvergenceWarning because the optimizer reached this limit "
+            "before fully converging. We kept this small training budget "
+            "because Task C is intended as a bounded prototype rather than "
+            "a model-optimization experiment."
+        )
+    else:
+        convergence_text = (
+            f"The MLP finished after {mlp['iterations_used']} iterations, "
+            f"below the configured maximum of {mlp['max_iterations']}."
+        )
+
     lines = [
         "# Part II QEC decoder report",
         "",
-        "Task A uses the 16 ordered syndrome bits and physical sample weights.",
-        f"Weighted logistic test logical-error rate: {a['logical_error_rate']:.6f}.",
-        f"Weighted logistic balanced accuracy: {a['balanced_accuracy']:.6f}.",
+        "## Inputs and evaluation",
         "",
-        "Task B is evaluated separately for distance 3 and distance 5. The combined",
-        "model uses only normalized detector-event density and the four supplied",
-        "decoder predictions. Supplied decoder Brier scores are N/A because they",
-        "provide binary predictions rather than probabilities.",
+        "Part II uses the two ML tables produced in Part I. The syndrome table "
+        "contains 75,598 aggregated examples representing 70 million physical "
+        "observations. The Google table contains 250,000 hardware shots.",
         "",
+        "The supplied train, validation and test splits were used without "
+        "modification. For Task A, physical sample weights were used during "
+        "training and evaluation. Model thresholds were selected using only "
+        "validation data, while test data was used for the final reported "
+        "metrics.",
+        "",
+        "Within each task and distance, all compared models are evaluated on the "
+        "same held-out test examples.",
+        "",
+        "## Model choices",
+        "",
+        "| Task | Input | Target | Model | Why the model fits the table |",
+        "|---|---|---|---|---|",
+        "| A | 16 ordered syndrome bits | Logical-error label | "
+        "Weighted logistic regression | The table has a small fixed binary "
+        "feature vector and a binary target. Logistic regression can use these "
+        "features directly. The aggregated rows also provide `sample_weight`, "
+        "which is used during fitting and evaluation so that physical observation "
+        "counts are preserved without expanding the data. |",
+        "| B | Detector-event density and four supplied decoder predictions | "
+        "Actual observable flip | Logistic regression | The input is a small "
+        "five-feature numeric/binary vector with a binary target, so a simple "
+        "linear classifier provides a clear way to combine the decoder signals. "
+        "Distance 3 and distance 5 are trained separately. |",
+        "| C | 200 unpacked detector bits | Actual observable flip | Small MLP | "
+        "The raw input is a larger binary vector. A small MLP can learn nonlinear "
+        "combinations of detector bits while keeping the experiment bounded and "
+        "simple. |",
+        "",
+        "## Results summary",
+        "",
+        "| Task | Model | Distance | Logical-error rate | Balanced accuracy | "
+        "Brier score | Training (s) | Prediction (s) |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
+        *result_rows,
+        "",
+        "For the four supplied Google decoders, training time, prediction time "
+        "and Brier score are reported as N/A. We receive their binary "
+        "predictions in the input data and do not train or execute the original "
+        "decoder implementations. `metrics.json` separately records the local "
+        "time needed to extract and evaluate those provided predictions.",
+        "",
+        "## Task A - Weighted syndrome decoder",
+        "",
+        f"The weighted positive logical-error proportion in the training data "
+        f"was {prior['train_positive_prior']:.4f}. The weighted prior baseline "
+        f"achieved a logical-error rate of {prior['logical_error_rate']:.5f}, "
+        f"balanced accuracy of {prior['balanced_accuracy']:.5f}, and Brier "
+        f"score of {prior['brier_score']:.5f}.",
+        "",
+        f"The weighted logistic regression achieved a logical-error rate of "
+        f"{logistic['logical_error_rate']:.5f}, balanced accuracy of "
+        f"{logistic['balanced_accuracy']:.5f}, and Brier score of "
+        f"{logistic['brier_score']:.5f}. The threshold selected on the "
+        f"validation split was {logistic['threshold']:.2f}.",
+        "",
+        "The logistic regression has a higher logical-error rate than the prior "
+        "baseline, but its balanced accuracy is clearly better. The dataset is "
+        "imbalanced, so a majority-based prediction can achieve a low total "
+        "error while performing poorly on the minority class. This is why we "
+        "report balanced accuracy together with logical-error rate.",
+        "",
+        "## Task B - Google decoder comparison",
+        "",
+        "Distance 3 and distance 5 were evaluated separately. For each distance "
+        "we compared a majority baseline, the four supplied decoder predictions, "
+        "and a combined logistic regression using detector-event density and "
+        "the four decoder outputs.",
+        "",
+        "### Distance 3",
+        "",
+        f"The majority baseline had a logical-error rate of "
+        f"{d3['majority_prior']['logical_error_rate']:.5f}. Tensor network "
+        f"contraction achieved {d3['tensor_network_contraction']['logical_error_rate']:.5f}, "
+        f"while the combined logistic regression achieved "
+        f"{d3['combined_logistic_regression']['logical_error_rate']:.5f}.",
+        "",
+        f"The supplied decoders disagreed on "
+        f"{d3['mistake_overlap']['decoder_prediction_disagreement_rate']:.5f} "
+        f"of the test shots. All four were wrong together on "
+        f"{d3['mistake_overlap']['all_four_wrong_rate']:.5f} of the shots. "
+        "This shows that the decoders do not always make the same mistakes and "
+        "there is some complementary information in their predictions.",
+        "",
+        "### Distance 5",
+        "",
+        f"The majority baseline had a logical-error rate of "
+        f"{d5['majority_prior']['logical_error_rate']:.5f}. Tensor network "
+        f"contraction achieved {d5['tensor_network_contraction']['logical_error_rate']:.5f}, "
+        f"while the combined logistic regression achieved "
+        f"{d5['combined_logistic_regression']['logical_error_rate']:.5f}.",
+        "",
+        f"The decoder disagreement rate was "
+        f"{d5['mistake_overlap']['decoder_prediction_disagreement_rate']:.5f}. "
+        f"All four decoders were wrong together on "
+        f"{d5['mistake_overlap']['all_four_wrong_rate']:.5f} of the test shots.",
+        "",
+        "For both distances, the combined model performs much better than the "
+        "majority baseline. Tensor network contraction is slightly better than "
+        "the combined model on the final test data. This is still a valid result "
+        "because the goal is a correct and repeatable ML pipeline rather than "
+        "outperforming the supplied decoders.",
+        "",
+        "## Task C - Raw detector prototype",
+        "",
+        "Task C uses only distance-3 rows with `shot_index < 12500`. Each model "
+        "input contains 200 unpacked detector bits.",
+        "",
+        f"The MLP achieved a logical-error rate of "
+        f"{mlp['logical_error_rate']:.5f}, balanced accuracy of "
+        f"{mlp['balanced_accuracy']:.5f}, and Brier score of "
+        f"{mlp['brier_score']:.5f}. Training took "
+        f"{mlp['training_seconds']:.3f} seconds and prediction took "
+        f"{mlp['prediction_seconds']:.3f} seconds.",
+        "",
+        "The result is close to random classification. A flat vector of 200 "
+        "detector bits does not explicitly represent detector positions, "
+        "neighbourhood relationships, or how detector events change across "
+        "QEC rounds. This limits what the simple MLP can learn from the "
+        "representation.",
+        "",
+        convergence_text,
+        "",
+        "## Reproducibility",
+        "",
+        "The pipeline records the random seed, dependency versions, hashes of "
+        "both ML input tables, feature order, split rules and timings. It saves "
+        "the fitted models, predictions and complete metrics under "
+        "`results/part2/`.",
+        "",
+        "Automated tests check the ML schemas, supplied split rules, syndrome "
+        "weights, little-endian detector-bit order, detector event counts, "
+        "feature order, repeatability and metric calculation.",
     ]
-    for d in (3, 5):
-        b = metrics["task_b"][f"distance_{d}"]
-        o = b["mistake_overlap"]
-        lines += [
-            f"## Distance {d}",
-            f"Combined logical-error rate: {b['combined_logistic_regression']['logical_error_rate']:.6f}.",
-            f"All four decoders wrong: {o['all_four_wrong_rate']:.6f}.",
-            f"At least one decoder wrong: {o['at_least_one_wrong_rate']:.6f}.",
-            f"Decoder prediction disagreement: {o['decoder_prediction_disagreement_rate']:.6f}.",
-            "The decoders do not make perfectly identical predictions, so the combined",
-            "linear model can use some complementary information.",
-            "",
-        ]
-    lines += [
-        "## Raw-detector prototype",
-        f"MLP logical-error rate: {c['logical_error_rate']:.6f}.",
-        f"Training time: {c['training_seconds']:.3f} s.",
-        f"Prediction time: {c['prediction_seconds']:.3f} s.",
-        "The flat 200-bit vector does not explicitly encode detector position,",
-        "neighborhood structure, or changes over QEC rounds. This limits the MLP.",
-        "",
-        "Models are fitted only on training data, thresholds are chosen only from",
-        "validation data, and final metrics use only the supplied test split.",
-    ]
-    (RESULTS_DIR / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    (RESULTS_DIR / "report.md").write_text(
+        "\n".join(lines) + "\n",
+        encoding="utf-8",
+    )
 
 
 def run(model_run_id: str) -> StageResult:
@@ -464,10 +748,19 @@ def run(model_run_id: str) -> StageResult:
             "task_c": [f"detector_bit_{i}" for i in range(200)],
         },
         "split_rules": {
-            "task_a": "0.0005 validation; 0.005 test; all other rates train",
-            "task_b_and_c": (
-                "odd shot_index test; even shot_index ending in 8 validation; "
-                "remaining even shot_index train"
+            "task_a": (
+                "validation: physical_fault_rate = 0.0005; "
+                "test: physical_fault_rate = 0.005; "
+                "train: all other fault rates"
+            ),
+            "task_b": (
+                "within each experiment: odd shot_index = test; "
+                "shot_index % 10 == 8 = validation; "
+                "remaining even shot_index = train"
+            ),
+            "task_c": (
+                "distance == 3 and shot_index < 12500; "
+                "retain the same Google train/validation/test split"
             ),
         },
         "total_seconds": float(perf_counter() - start),
