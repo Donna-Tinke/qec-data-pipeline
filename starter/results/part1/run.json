@@ -1,0 +1,134 @@
+{
+  "run_id": "run_20261011_203624_9955ea",
+  "code_revision": "unavailable-in-container",
+  "started_at": "2026-10-11T20:36:24.049967+00:00",
+  "finished_at": "2026-10-11T20:38:27.867606+00:00",
+  "duration_seconds": 123.818,
+  "bronze_facts": {
+    "release_name": "quantum-data-core",
+    "bundle_version": 3,
+    "release_date": "2026-08-05",
+    "bronze_input_count": 3,
+    "bronze_inputs": [
+      {
+        "source": "qasmbench",
+        "source_object_id": "srcobj_bd6e183a3b2d35e50c3c07f8",
+        "bronze_object": "bronze/source=qasmbench/qasmbench-qec.zip",
+        "input_sha256": "60307f88e34b1f752b94223d6d136da72c629b4b625ac6d1c30e5e2e4f85722a",
+        "bytes": 144172,
+        "archive_member_count": 19
+      },
+      {
+        "source": "qec_syndromes",
+        "source_object_id": "srcobj_69fb737986d09bdfe7a3836a",
+        "bronze_object": "bronze/source=qec_syndromes/syndromes_dataset.zip",
+        "input_sha256": "bdfce36a71f04295ac78fb372d9c2e381801c05e3be119f919750ef59026d072",
+        "bytes": 358017,
+        "archive_member_count": 8
+      },
+      {
+        "source": "google_qec",
+        "source_object_id": "srcobj_b2822ac50e7b9d542f0371cb",
+        "bronze_object": "bronze/source=google_qec/google-surface-code-curated.zip",
+        "input_sha256": "5d6a24f89f055883a49910979490be4baef54d28bf9a0f8e096a1d6c46d1ea56",
+        "bytes": 14638673,
+        "archive_member_count": 76
+      }
+    ]
+  },
+  "stages": {
+    "register_sources": {
+      "stage": "register_sources",
+      "input_count": 3,
+      "output_count": 3,
+      "issue_count": 0,
+      "started_at": "2026-10-11T20:36:24.049973+00:00",
+      "finished_at": "2026-10-11T20:36:24.122529+00:00"
+    },
+    "prepare_data": {
+      "stage": "prepare_data",
+      "input_count": 75609,
+      "output_count": 325614,
+      "issue_count": 0,
+      "started_at": "2026-10-11T20:36:24.122560+00:00",
+      "finished_at": "2026-10-11T20:37:07.988634+00:00"
+    },
+    "load_postgres": {
+      "stage": "load_postgres",
+      "input_count": 325604,
+      "output_count": 357586,
+      "issue_count": 0,
+      "started_at": "2026-10-11T20:37:07.988641+00:00",
+      "finished_at": "2026-10-11T20:38:15.069559+00:00"
+    },
+    "build_ml_tables": {
+      "stage": "build_ml_tables",
+      "input_count": 325598,
+      "output_count": 325598,
+      "issue_count": 0,
+      "started_at": "2026-10-11T20:38:15.069598+00:00",
+      "finished_at": "2026-10-11T20:38:27.867595+00:00"
+    }
+  },
+  "row_counts": {
+    "silver_tables": {
+      "google_qec.experiment": {
+        "read": 5,
+        "accepted": 5,
+        "rejected": 0,
+        "reconciled": true
+      },
+      "google_qec.shot": {
+        "read": 250000,
+        "accepted": 250000,
+        "rejected": 0,
+        "reconciled": true
+      },
+      "qec_syndromes.syndrome_observation": {
+        "read": 75598,
+        "accepted": 75598,
+        "rejected": 0,
+        "reconciled": true,
+        "weighted_shots": 70000000
+      },
+      "qasmbench.circuit": {
+        "read": 6,
+        "accepted": 6,
+        "rejected": 0,
+        "reconciled": true
+      },
+      "qasmbench.stabilizer_check": {
+        "read": 4,
+        "accepted": 4,
+        "rejected": 0,
+        "reconciled": true
+      },
+      "qasmbench.conditional_correction": {
+        "read": 6,
+        "accepted": 6,
+        "rejected": 0,
+        "reconciled": true
+      }
+    },
+    "gold_tables": {
+      "gold.decoder": 4,
+      "gold.google_experiment": 5,
+      "gold.google_shot": 250000,
+      "gold.google_shot_raw": 250000,
+      "gold.google_shot_prediction": 1000000,
+      "gold.google_detector_position_stat": 1400,
+      "gold.circuit": 6,
+      "gold.circuit_register": 16,
+      "gold.stabilizer_check": 4,
+      "gold.stabilizer_data_qubit": 8,
+      "gold.conditional_correction": 6,
+      "gold.simulated_experiment": 7,
+      "gold.syndrome_pattern": 31941,
+      "gold.syndrome_observation": 75598
+    },
+    "ml_tables": {
+      "ml.ml_google_decoder_example": 250000,
+      "ml.ml_syndrome_decoder_example": 75598
+    }
+  }
+}

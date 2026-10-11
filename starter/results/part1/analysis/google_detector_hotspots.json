@@ -1,0 +1,155 @@
+{
+  "query": "google_detector_hotspots.sql",
+  "rows": [
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_3_5",
+      "detector_index": 181,
+      "fired_count": 10606,
+      "firing_rate": "0.2121"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_3_5",
+      "detector_index": 165,
+      "fired_count": 10540,
+      "firing_rate": "0.2108"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_3_5",
+      "detector_index": 149,
+      "fired_count": 10531,
+      "firing_rate": "0.2106"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_3_5",
+      "detector_index": 173,
+      "fired_count": 10521,
+      "firing_rate": "0.2104"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_3_5",
+      "detector_index": 157,
+      "fired_count": 10512,
+      "firing_rate": "0.2102"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_5_3",
+      "detector_index": 175,
+      "fired_count": 10411,
+      "firing_rate": "0.2082"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_5_3",
+      "detector_index": 135,
+      "fired_count": 10335,
+      "firing_rate": "0.2067"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_5_3",
+      "detector_index": 119,
+      "fired_count": 10333,
+      "firing_rate": "0.2067"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_5_3",
+      "detector_index": 191,
+      "fired_count": 10317,
+      "firing_rate": "0.2063"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_5_3",
+      "detector_index": 103,
+      "fired_count": 10299,
+      "firing_rate": "0.2060"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_5_7",
+      "detector_index": 112,
+      "fired_count": 8927,
+      "firing_rate": "0.1785"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_5_7",
+      "detector_index": 168,
+      "fired_count": 8829,
+      "firing_rate": "0.1766"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_5_7",
+      "detector_index": 136,
+      "fired_count": 8773,
+      "firing_rate": "0.1755"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_5_7",
+      "detector_index": 176,
+      "fired_count": 8770,
+      "firing_rate": "0.1754"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_5_7",
+      "detector_index": 128,
+      "fired_count": 8753,
+      "firing_rate": "0.1751"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_7_5",
+      "detector_index": 175,
+      "fired_count": 9255,
+      "firing_rate": "0.1851"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_7_5",
+      "detector_index": 55,
+      "fired_count": 9177,
+      "firing_rate": "0.1835"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_7_5",
+      "detector_index": 143,
+      "fired_count": 9162,
+      "firing_rate": "0.1832"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_7_5",
+      "detector_index": 119,
+      "fired_count": 9150,
+      "firing_rate": "0.1830"
+    },
+    {
+      "experiment_id": "surface_code_bX_d3_r25_center_7_5",
+      "detector_index": 95,
+      "fired_count": 9145,
+      "firing_rate": "0.1829"
+    },
+    {
+      "experiment_id": "surface_code_bX_d5_r25_center_5_5",
+      "detector_index": 541,
+      "fired_count": 10882,
+      "firing_rate": "0.2176"
+    },
+    {
+      "experiment_id": "surface_code_bX_d5_r25_center_5_5",
+      "detector_index": 517,
+      "fired_count": 10833,
+      "firing_rate": "0.2167"
+    },
+    {
+      "experiment_id": "surface_code_bX_d5_r25_center_5_5",
+      "detector_index": 479,
+      "fired_count": 10802,
+      "firing_rate": "0.2160"
+    },
+    {
+      "experiment_id": "surface_code_bX_d5_r25_center_5_5",
+      "detector_index": 301,
+      "fired_count": 10778,
+      "firing_rate": "0.2156"
+    },
+    {
+      "experiment_id": "surface_code_bX_d5_r25_center_5_5",
+      "detector_index": 311,
+      "fired_count": 10764,
+      "firing_rate": "0.2153"
+    }
+  ]
+}

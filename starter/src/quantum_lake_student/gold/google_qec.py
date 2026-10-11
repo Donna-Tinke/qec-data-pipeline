@@ -1,6 +1,6 @@
 """Load the Google QEC Silver tables into the PostgreSQL Gold model.
 
-Design and rationale: ``starter/docs/gold-google-qec-design.md``.
+Design and rationale: ``starter/docs/part1-design-report.md``.
 
 The whole load (DDL, data, derived tables, views, checks) runs in a single
 transaction: it either completes or the previous Gold version is untouched.

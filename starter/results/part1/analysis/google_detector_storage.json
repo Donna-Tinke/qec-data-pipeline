@@ -1,0 +1,25 @@
+{
+  "shots_total": 250000,
+  "detector_events_total": 10446925,
+  "strategies": {
+    "packed_bytes_in_shot_row": {
+      "detector_bits_column_bytes": 9000000,
+      "google_shot_table_incl_indexes_bytes": 95993856,
+      "reproduces_ml_packed_bytes": true
+    },
+    "per_position_summary": {
+      "rows": "sum(detector_count) per experiment",
+      "table_incl_indexes_bytes": 278528,
+      "reproduces_ml_packed_bytes": false
+    },
+    "one_row_per_fired_detector": {
+      "sample_shots": 10000,
+      "sample_rows": 419396,
+      "sample_bytes": 76791808,
+      "extrapolated_rows": 10484900,
+      "extrapolated_bytes": 1919795200,
+      "reproduces_ml_packed_bytes": true
+    }
+  },
+  "unpacked_one_byte_per_bit_bytes": 70000000
+}

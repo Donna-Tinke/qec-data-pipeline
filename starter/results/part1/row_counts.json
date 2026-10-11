@@ -1,0 +1,61 @@
+{
+  "silver_tables": {
+    "google_qec.experiment": {
+      "read": 5,
+      "accepted": 5,
+      "rejected": 0,
+      "reconciled": true
+    },
+    "google_qec.shot": {
+      "read": 250000,
+      "accepted": 250000,
+      "rejected": 0,
+      "reconciled": true
+    },
+    "qec_syndromes.syndrome_observation": {
+      "read": 75598,
+      "accepted": 75598,
+      "rejected": 0,
+      "reconciled": true,
+      "weighted_shots": 70000000
+    },
+    "qasmbench.circuit": {
+      "read": 6,
+      "accepted": 6,
+      "rejected": 0,
+      "reconciled": true
+    },
+    "qasmbench.stabilizer_check": {
+      "read": 4,
+      "accepted": 4,
+      "rejected": 0,
+      "reconciled": true
+    },
+    "qasmbench.conditional_correction": {
+      "read": 6,
+      "accepted": 6,
+      "rejected": 0,
+      "reconciled": true
+    }
+  },
+  "gold_tables": {
+    "gold.decoder": 4,
+    "gold.google_experiment": 5,
+    "gold.google_shot": 250000,
+    "gold.google_shot_raw": 250000,
+    "gold.google_shot_prediction": 1000000,
+    "gold.google_detector_position_stat": 1400,
+    "gold.circuit": 6,
+    "gold.circuit_register": 16,
+    "gold.stabilizer_check": 4,
+    "gold.stabilizer_data_qubit": 8,
+    "gold.conditional_correction": 6,
+    "gold.simulated_experiment": 7,
+    "gold.syndrome_pattern": 31941,
+    "gold.syndrome_observation": 75598
+  },
+  "ml_tables": {
+    "ml.ml_google_decoder_example": 250000,
+    "ml.ml_syndrome_decoder_example": 75598
+  }
+}

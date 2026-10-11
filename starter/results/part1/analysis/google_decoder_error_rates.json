@@ -1,0 +1,205 @@
+{
+  "query": "google_decoder_error_rates.sql",
+  "rows": [
+    {
+      "distance": 3,
+      "center_row": 3,
+      "center_col": 5,
+      "decoder_name": "belief_matching",
+      "shots": 50000,
+      "decoder_mistakes": 20125,
+      "decoder_error_rate": "0.40250",
+      "actual_flip_rate": "0.49034"
+    },
+    {
+      "distance": 3,
+      "center_row": 3,
+      "center_col": 5,
+      "decoder_name": "correlated_matching",
+      "shots": 50000,
+      "decoder_mistakes": 20971,
+      "decoder_error_rate": "0.41942",
+      "actual_flip_rate": "0.49034"
+    },
+    {
+      "distance": 3,
+      "center_row": 3,
+      "center_col": 5,
+      "decoder_name": "pymatching",
+      "shots": 50000,
+      "decoder_mistakes": 21708,
+      "decoder_error_rate": "0.43416",
+      "actual_flip_rate": "0.49034"
+    },
+    {
+      "distance": 3,
+      "center_row": 3,
+      "center_col": 5,
+      "decoder_name": "tensor_network_contraction",
+      "shots": 50000,
+      "decoder_mistakes": 20114,
+      "decoder_error_rate": "0.40228",
+      "actual_flip_rate": "0.49034"
+    },
+    {
+      "distance": 3,
+      "center_row": 5,
+      "center_col": 3,
+      "decoder_name": "belief_matching",
+      "shots": 50000,
+      "decoder_mistakes": 20796,
+      "decoder_error_rate": "0.41592",
+      "actual_flip_rate": "0.49580"
+    },
+    {
+      "distance": 3,
+      "center_row": 5,
+      "center_col": 3,
+      "decoder_name": "correlated_matching",
+      "shots": 50000,
+      "decoder_mistakes": 21259,
+      "decoder_error_rate": "0.42518",
+      "actual_flip_rate": "0.49580"
+    },
+    {
+      "distance": 3,
+      "center_row": 5,
+      "center_col": 3,
+      "decoder_name": "pymatching",
+      "shots": 50000,
+      "decoder_mistakes": 22159,
+      "decoder_error_rate": "0.44318",
+      "actual_flip_rate": "0.49580"
+    },
+    {
+      "distance": 3,
+      "center_row": 5,
+      "center_col": 3,
+      "decoder_name": "tensor_network_contraction",
+      "shots": 50000,
+      "decoder_mistakes": 20652,
+      "decoder_error_rate": "0.41304",
+      "actual_flip_rate": "0.49580"
+    },
+    {
+      "distance": 3,
+      "center_row": 5,
+      "center_col": 7,
+      "decoder_name": "belief_matching",
+      "shots": 50000,
+      "decoder_mistakes": 19598,
+      "decoder_error_rate": "0.39196",
+      "actual_flip_rate": "0.49456"
+    },
+    {
+      "distance": 3,
+      "center_row": 5,
+      "center_col": 7,
+      "decoder_name": "correlated_matching",
+      "shots": 50000,
+      "decoder_mistakes": 20912,
+      "decoder_error_rate": "0.41824",
+      "actual_flip_rate": "0.49456"
+    },
+    {
+      "distance": 3,
+      "center_row": 5,
+      "center_col": 7,
+      "decoder_name": "pymatching",
+      "shots": 50000,
+      "decoder_mistakes": 21532,
+      "decoder_error_rate": "0.43064",
+      "actual_flip_rate": "0.49456"
+    },
+    {
+      "distance": 3,
+      "center_row": 5,
+      "center_col": 7,
+      "decoder_name": "tensor_network_contraction",
+      "shots": 50000,
+      "decoder_mistakes": 19196,
+      "decoder_error_rate": "0.38392",
+      "actual_flip_rate": "0.49456"
+    },
+    {
+      "distance": 3,
+      "center_row": 7,
+      "center_col": 5,
+      "decoder_name": "belief_matching",
+      "shots": 50000,
+      "decoder_mistakes": 19418,
+      "decoder_error_rate": "0.38836",
+      "actual_flip_rate": "0.49154"
+    },
+    {
+      "distance": 3,
+      "center_row": 7,
+      "center_col": 5,
+      "decoder_name": "correlated_matching",
+      "shots": 50000,
+      "decoder_mistakes": 20648,
+      "decoder_error_rate": "0.41296",
+      "actual_flip_rate": "0.49154"
+    },
+    {
+      "distance": 3,
+      "center_row": 7,
+      "center_col": 5,
+      "decoder_name": "pymatching",
+      "shots": 50000,
+      "decoder_mistakes": 21497,
+      "decoder_error_rate": "0.42994",
+      "actual_flip_rate": "0.49154"
+    },
+    {
+      "distance": 3,
+      "center_row": 7,
+      "center_col": 5,
+      "decoder_name": "tensor_network_contraction",
+      "shots": 50000,
+      "decoder_mistakes": 19436,
+      "decoder_error_rate": "0.38872",
+      "actual_flip_rate": "0.49154"
+    },
+    {
+      "distance": 5,
+      "center_row": 5,
+      "center_col": 5,
+      "decoder_name": "belief_matching",
+      "shots": 50000,
+      "decoder_mistakes": 20074,
+      "decoder_error_rate": "0.40148",
+      "actual_flip_rate": "0.50000"
+    },
+    {
+      "distance": 5,
+      "center_row": 5,
+      "center_col": 5,
+      "decoder_name": "correlated_matching",
+      "shots": 50000,
+      "decoder_mistakes": 21283,
+      "decoder_error_rate": "0.42566",
+      "actual_flip_rate": "0.50000"
+    },
+    {
+      "distance": 5,
+      "center_row": 5,
+      "center_col": 5,
+      "decoder_name": "pymatching",
+      "shots": 50000,
+      "decoder_mistakes": 22551,
+      "decoder_error_rate": "0.45102",
+      "actual_flip_rate": "0.50000"
+    },
+    {
+      "distance": 5,
+      "center_row": 5,
+      "center_col": 5,
+      "decoder_name": "tensor_network_contraction",
+      "shots": 50000,
+      "decoder_mistakes": 19775,
+      "decoder_error_rate": "0.39550",
+      "actual_flip_rate": "0.50000"
+    }
+  ]
+}

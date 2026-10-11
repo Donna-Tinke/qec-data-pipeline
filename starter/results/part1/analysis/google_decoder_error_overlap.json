@@ -1,0 +1,65 @@
+{
+  "query": "google_decoder_error_overlap.sql",
+  "rows": [
+    {
+      "distance": 3,
+      "wrong_decoders": 0,
+      "shots": 60536,
+      "share_of_distance": "0.30268"
+    },
+    {
+      "distance": 3,
+      "wrong_decoders": 1,
+      "shots": 38275,
+      "share_of_distance": "0.19138"
+    },
+    {
+      "distance": 3,
+      "wrong_decoders": 2,
+      "shots": 40485,
+      "share_of_distance": "0.20243"
+    },
+    {
+      "distance": 3,
+      "wrong_decoders": 3,
+      "shots": 32040,
+      "share_of_distance": "0.16020"
+    },
+    {
+      "distance": 3,
+      "wrong_decoders": 4,
+      "shots": 28664,
+      "share_of_distance": "0.14332"
+    },
+    {
+      "distance": 5,
+      "wrong_decoders": 0,
+      "shots": 12176,
+      "share_of_distance": "0.24352"
+    },
+    {
+      "distance": 5,
+      "wrong_decoders": 1,
+      "shots": 11853,
+      "share_of_distance": "0.23706"
+    },
+    {
+      "distance": 5,
+      "wrong_decoders": 2,
+      "shots": 11535,
+      "share_of_distance": "0.23070"
+    },
+    {
+      "distance": 5,
+      "wrong_decoders": 3,
+      "shots": 8984,
+      "share_of_distance": "0.17968"
+    },
+    {
+      "distance": 5,
+      "wrong_decoders": 4,
+      "shots": 5452,
+      "share_of_distance": "0.10904"
+    }
+  ]
+}

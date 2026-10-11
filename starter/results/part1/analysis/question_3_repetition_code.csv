@@ -1,0 +1,4 @@
+data_qubit,parity_ancillas,syndrome_bits,condition_register,condition_value,recovery_gate
+q[0],a[0],syn[0],syn,1,x
+q[1],"a[0], a[1]","syn[0], syn[1]",syn,3,x
+q[2],a[1],syn[1],syn,2,x

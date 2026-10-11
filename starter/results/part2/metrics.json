@@ -1,0 +1,175 @@
+{
+  "task_a": {
+    "row_counts": {
+      "test": 20887,
+      "train": 53304,
+      "validation": 1407
+    },
+    "weighted_logistic_regression": {
+      "balanced_accuracy": 0.6294603138905912,
+      "brier_score": 0.09095580410416897,
+      "logical_error_rate": 0.1955355,
+      "prediction_seconds": 0.0005568660562857985,
+      "threshold": 0.1,
+      "training_seconds": 0.23207346501294523
+    },
+    "weighted_observation_counts": {
+      "test": 10000000,
+      "train": 50000000,
+      "validation": 10000000
+    },
+    "weighted_prior": {
+      "balanced_accuracy": 0.5,
+      "brier_score": 0.09691046819962242,
+      "logical_error_rate": 0.10395,
+      "prediction_seconds": 3.958295565098524e-05,
+      "threshold": 0.5,
+      "train_positive_prior": 0.04258168,
+      "training_seconds": 0.00019073893781751394
+    }
+  },
+  "task_b": {
+    "distance_3": {
+      "belief_matching": {
+        "balanced_accuracy": 0.5985358999222636,
+        "brier_score": null,
+        "local_evaluation_seconds": 0.005479873972944915,
+        "logical_error_rate": 0.40133,
+        "prediction_seconds": null,
+        "training_seconds": null
+      },
+      "combined_logistic_regression": {
+        "balanced_accuracy": 0.6025061122401745,
+        "brier_score": 0.2351521991416092,
+        "logical_error_rate": 0.39722,
+        "prediction_seconds": 0.008946506073698401,
+        "threshold": 0.5,
+        "training_seconds": 0.03743773291353136
+      },
+      "correlated_matching": {
+        "balanced_accuracy": 0.5779208474436803,
+        "brier_score": null,
+        "local_evaluation_seconds": 0.005132565042003989,
+        "logical_error_rate": 0.42197,
+        "prediction_seconds": null,
+        "training_seconds": null
+      },
+      "majority_prior": {
+        "balanced_accuracy": 0.5,
+        "brier_score": 0.24995202015625007,
+        "logical_error_rate": 0.49295,
+        "prediction_seconds": 4.265597090125084e-05,
+        "threshold": 0.5,
+        "train_positive_prior": 0.4916375,
+        "training_seconds": 0.0001150970347225666
+      },
+      "mistake_overlap": {
+        "all_four_wrong_rate": 0.1444,
+        "at_least_one_wrong_rate": 0.69824,
+        "decoder_prediction_disagreement_rate": 0.55384
+      },
+      "pymatching": {
+        "balanced_accuracy": 0.5634564847837398,
+        "brier_score": null,
+        "local_evaluation_seconds": 0.004714149050414562,
+        "logical_error_rate": 0.43636,
+        "prediction_seconds": null,
+        "training_seconds": null
+      },
+      "row_counts": {
+        "test": 100000,
+        "train": 80000,
+        "validation": 20000
+      },
+      "tensor_network_contraction": {
+        "balanced_accuracy": 0.6031201183107213,
+        "brier_score": null,
+        "local_evaluation_seconds": 0.005419428925961256,
+        "logical_error_rate": 0.39668,
+        "prediction_seconds": null,
+        "training_seconds": null
+      }
+    },
+    "distance_5": {
+      "belief_matching": {
+        "balanced_accuracy": 0.600571630242778,
+        "brier_score": null,
+        "local_evaluation_seconds": 0.0012336120707914233,
+        "logical_error_rate": 0.39944,
+        "prediction_seconds": null,
+        "training_seconds": null
+      },
+      "combined_logistic_regression": {
+        "balanced_accuracy": 0.6026480526322432,
+        "brier_score": 0.23406043447168412,
+        "logical_error_rate": 0.39768,
+        "prediction_seconds": 0.0003868909552693367,
+        "threshold": 0.55,
+        "training_seconds": 0.012170718982815742
+      },
+      "correlated_matching": {
+        "balanced_accuracy": 0.5774100785929823,
+        "brier_score": null,
+        "local_evaluation_seconds": 0.001009274972602725,
+        "logical_error_rate": 0.4226,
+        "prediction_seconds": null,
+        "training_seconds": null
+      },
+      "majority_prior": {
+        "balanced_accuracy": 0.5,
+        "brier_score": 0.250005088,
+        "logical_error_rate": 0.50152,
+        "prediction_seconds": 2.947391476482153e-05,
+        "threshold": 0.5,
+        "train_positive_prior": 0.4988,
+        "training_seconds": 8.603802416473627e-05
+      },
+      "mistake_overlap": {
+        "all_four_wrong_rate": 0.10852,
+        "at_least_one_wrong_rate": 0.75632,
+        "decoder_prediction_disagreement_rate": 0.6478
+      },
+      "pymatching": {
+        "balanced_accuracy": 0.5451846095780879,
+        "brier_score": null,
+        "local_evaluation_seconds": 0.0009520950261503458,
+        "logical_error_rate": 0.4548,
+        "prediction_seconds": null,
+        "training_seconds": null
+      },
+      "row_counts": {
+        "test": 25000,
+        "train": 20000,
+        "validation": 5000
+      },
+      "tensor_network_contraction": {
+        "balanced_accuracy": 0.6047613329623347,
+        "brier_score": null,
+        "local_evaluation_seconds": 0.0009395449887961149,
+        "logical_error_rate": 0.39524,
+        "prediction_seconds": null,
+        "training_seconds": null
+      }
+    }
+  },
+  "task_c": {
+    "feature_count": 200,
+    "raw_detector_mlp": {
+      "balanced_accuracy": 0.502786252871328,
+      "brier_score": 0.27120134234428406,
+      "hit_iteration_limit": true,
+      "iterations_used": 20,
+      "logical_error_rate": 0.49728,
+      "max_iterations": 20,
+      "prediction_seconds": 0.005854220944456756,
+      "threshold": 0.7000000000000001,
+      "training_seconds": 0.4435557429678738
+    },
+    "row_counts": {
+      "test": 25000,
+      "train": 20000,
+      "validation": 5000
+    },
+    "subset_rule": "distance = 3 AND shot_index < 12500"
+  }
+}

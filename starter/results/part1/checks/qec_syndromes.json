@@ -1,0 +1,171 @@
+{
+  "archive_members": [
+    "README.txt",
+    "d-3_pfr-0.000010_nb-10M.csv",
+    "d-3_pfr-0.000050_nb-10M.csv",
+    "d-3_pfr-0.000100_nb-10M.csv",
+    "d-3_pfr-0.000500_nb-10M.csv",
+    "d-3_pfr-0.001000_nb-10M.csv",
+    "d-3_pfr-0.005000_nb-10M.csv",
+    "d-3_pfr-0.010000_nb-10M.csv"
+  ],
+  "bronze_object": "bronze/source=qec_syndromes/syndromes_dataset.zip",
+  "csv_file_count": 7,
+  "files": [
+    {
+      "archive_member": "d-3_pfr-0.000010_nb-10M.csv",
+      "distinct_syndromes": 68,
+      "experiment_id": "d-3_pfr-0.000010_nb-10M",
+      "header": [
+        "labels",
+        "syndromes",
+        "quantity"
+      ],
+      "header_matches_readme_label": false,
+      "nominal_sample_count": 10000000,
+      "physical_fault_rate": 1e-05,
+      "rows_accepted": 68,
+      "rows_read": 68,
+      "rows_rejected": 0,
+      "syndromes_with_both_labels": 0,
+      "weight_label_false": 9997660,
+      "weight_label_true": 2340,
+      "weighted_total": 10000000,
+      "weighted_total_matches_filename": true
+    },
+    {
+      "archive_member": "d-3_pfr-0.000050_nb-10M.csv",
+      "distinct_syndromes": 202,
+      "experiment_id": "d-3_pfr-0.000050_nb-10M",
+      "header": [
+        "labels",
+        "syndromes",
+        "quantity"
+      ],
+      "header_matches_readme_label": false,
+      "nominal_sample_count": 10000000,
+      "physical_fault_rate": 5e-05,
+      "rows_accepted": 215,
+      "rows_read": 215,
+      "rows_rejected": 0,
+      "syndromes_with_both_labels": 13,
+      "weight_label_false": 9988458,
+      "weight_label_true": 11542,
+      "weighted_total": 10000000,
+      "weighted_total_matches_filename": true
+    },
+    {
+      "archive_member": "d-3_pfr-0.000100_nb-10M.csv",
+      "distinct_syndromes": 445,
+      "experiment_id": "d-3_pfr-0.000100_nb-10M",
+      "header": [
+        "labels",
+        "syndromes",
+        "quantity"
+      ],
+      "header_matches_readme_label": false,
+      "nominal_sample_count": 10000000,
+      "physical_fault_rate": 0.0001,
+      "rows_accepted": 491,
+      "rows_read": 491,
+      "rows_rejected": 0,
+      "syndromes_with_both_labels": 46,
+      "weight_label_false": 9977090,
+      "weight_label_true": 22910,
+      "weighted_total": 10000000,
+      "weighted_total_matches_filename": true
+    },
+    {
+      "archive_member": "d-3_pfr-0.000500_nb-10M.csv",
+      "distinct_syndromes": 1228,
+      "experiment_id": "d-3_pfr-0.000500_nb-10M",
+      "header": [
+        "labels",
+        "syndromes",
+        "quantity"
+      ],
+      "header_matches_readme_label": false,
+      "nominal_sample_count": 10000000,
+      "physical_fault_rate": 0.0005,
+      "rows_accepted": 1407,
+      "rows_read": 1407,
+      "rows_rejected": 0,
+      "syndromes_with_both_labels": 179,
+      "weight_label_false": 9885597,
+      "weight_label_true": 114403,
+      "weighted_total": 10000000,
+      "weighted_total_matches_filename": true
+    },
+    {
+      "archive_member": "d-3_pfr-0.001000_nb-10M.csv",
+      "distinct_syndromes": 2387,
+      "experiment_id": "d-3_pfr-0.001000_nb-10M",
+      "header": [
+        "labels",
+        "syndromes",
+        "quantity"
+      ],
+      "header_matches_readme_label": false,
+      "nominal_sample_count": 10000000,
+      "physical_fault_rate": 0.001,
+      "rows_accepted": 2854,
+      "rows_read": 2854,
+      "rows_rejected": 0,
+      "syndromes_with_both_labels": 467,
+      "weight_label_false": 9772982,
+      "weight_label_true": 227018,
+      "weighted_total": 10000000,
+      "weighted_total_matches_filename": true
+    },
+    {
+      "archive_member": "d-3_pfr-0.005000_nb-10M.csv",
+      "distinct_syndromes": 14643,
+      "experiment_id": "d-3_pfr-0.005000_nb-10M",
+      "header": [
+        "labels",
+        "syndromes",
+        "quantity"
+      ],
+      "header_matches_readme_label": false,
+      "nominal_sample_count": 10000000,
+      "physical_fault_rate": 0.005,
+      "rows_accepted": 20887,
+      "rows_read": 20887,
+      "rows_rejected": 0,
+      "syndromes_with_both_labels": 6244,
+      "weight_label_false": 8960500,
+      "weight_label_true": 1039500,
+      "weighted_total": 10000000,
+      "weighted_total_matches_filename": true
+    },
+    {
+      "archive_member": "d-3_pfr-0.010000_nb-10M.csv",
+      "distinct_syndromes": 31466,
+      "experiment_id": "d-3_pfr-0.010000_nb-10M",
+      "header": [
+        "labels",
+        "syndromes",
+        "quantity"
+      ],
+      "header_matches_readme_label": false,
+      "nominal_sample_count": 10000000,
+      "physical_fault_rate": 0.01,
+      "rows_accepted": 49676,
+      "rows_read": 49676,
+      "rows_rejected": 0,
+      "syndromes_with_both_labels": 18210,
+      "weight_label_false": 8134726,
+      "weight_label_true": 1865274,
+      "weighted_total": 10000000,
+      "weighted_total_matches_filename": true
+    }
+  ],
+  "input_sha256": "bdfce36a71f04295ac78fb372d9c2e381801c05e3be119f919750ef59026d072",
+  "issue_counts": {},
+  "rows_accepted": 75598,
+  "rows_read": 75598,
+  "rows_reconcile": true,
+  "rows_rejected": 0,
+  "source_name": "qec_syndromes",
+  "weighted_total": 70000000
+}
