@@ -24,7 +24,7 @@ from quantum_lake_student.config import Settings
 from quantum_lake_student.connections import minio_client
 from quantum_lake_student.formats import b8_record_bytes, iter_b8_records, parse_01_records
 from quantum_lake_student.lake import write_parquet
-from quantum_lake_student.models import QualityFinding, Severity, StageResult, stable_record_hash
+from quantum_lake_student.models import QualityFinding, Severity, StageResult
 from quantum_lake_student.results import replace_source_rows
 
 SOURCE_NAME = "google_qec"
@@ -536,14 +536,13 @@ def write_silver_tables(
     )
 
 
+def build_issue_id(rule_id: str, locator: str) -> str:
+    """Return a deterministic, run-independent identifier for a data quality issue."""
+    return f"{rule_id}:{locator}"
+
+
 def quality_finding_to_issue_row(finding: QualityFinding, run_id: str) -> dict[str, Any]:
-    issue_id = stable_record_hash(
-        {
-            "run_id": run_id,
-            "rule_id": finding.rule_id,
-            "source_record_locator": finding.source_record_locator,
-        }
-    )
+    issue_id = build_issue_id(finding.rule_id, finding.source_record_locator)
     return {
         "issue_id": issue_id,
         "run_id": run_id,

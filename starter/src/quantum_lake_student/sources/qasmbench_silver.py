@@ -120,6 +120,11 @@ def build_source_record_id(source_name: str, archive_member: str, record_locator
     return f"{source_name}:{archive_member}"
 
 
+def build_issue_id(rule_id: str, locator: str) -> str:
+    """Return a deterministic, run-independent identifier for a data quality issue."""
+    return f"{rule_id}:{locator}"
+
+
 def parse_qasm(
     content: str,
     source_name: str,
@@ -564,13 +569,13 @@ def run_qasmbench_pipeline(
     issue_records: list[dict[str, Any]] = []
     for f in all_findings:
         issue_records.append({
-            "issue_id": f"{run_id}:{f.rule_id}:{f.source_record_locator}",
+            "issue_id": build_issue_id(f.rule_id, f.source_record_locator),
             "run_id": run_id,
             "source_record_id": None if f.severity == Severity.ERROR else f.source_record_locator,
             "rule_id": f.rule_id,
             "severity": str(f.severity),
             "observed_value": str(f.observed_value) if f.observed_value is not None else None,
-            "action": "exclude" if f.severity == Severity.ERROR else "warn",
+            "action": "rejected" if f.severity == Severity.ERROR else "kept",
             "reason": f.message,
         })
 

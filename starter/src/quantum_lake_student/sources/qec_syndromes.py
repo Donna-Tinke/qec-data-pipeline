@@ -27,7 +27,7 @@ import pyarrow as pa
 from quantum_lake_student.config import Settings
 from quantum_lake_student.connections import minio_client
 from quantum_lake_student.lake import read_parquet, write_parquet
-from quantum_lake_student.models import Severity, StageResult, stable_record_hash
+from quantum_lake_student.models import Severity, StageResult
 from quantum_lake_student.results import replace_source_rows
 
 SOURCE_NAME = "qec_syndromes"
@@ -126,6 +126,11 @@ class FileMetadata:
     nominal_sample_count: int
 
 
+def build_issue_id(rule_id: str, locator: str) -> str:
+    """Return a deterministic, run-independent identifier for a data quality issue."""
+    return f"{rule_id}:{locator}"
+
+
 @dataclass(frozen=True)
 class Issue:
     """One data_issues row, before the run_id is attached."""
@@ -141,7 +146,7 @@ class Issue:
     def to_row(self, run_id: str) -> dict[str, Any]:
         # issue_id leaves out run_id so a rerun on the same input gives the same id
         return {
-            "issue_id": stable_record_hash({"rule_id": self.rule_id, "locator": self.locator}),
+            "issue_id": build_issue_id(self.rule_id, self.locator),
             "run_id": run_id,
             "source_record_id": self.source_record_id,
             "rule_id": self.rule_id,

@@ -219,6 +219,7 @@ def test_issue_id_is_stable_across_runs() -> None:
     first = [issue.to_row("run-1") for issue in result.issues]
     second = [issue.to_row("run-2") for issue in result.issues]
     assert [row["issue_id"] for row in first] == [row["issue_id"] for row in second]
+    assert first[0]["issue_id"].startswith("qec_syndromes.")
 
 
 # --- full run on the real Bronze zip ---------------------------------------
