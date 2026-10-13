@@ -170,9 +170,10 @@ def test_quality_finding_to_issue_row_is_stable_across_runs() -> None:
     )
 
     first = google_qec.quality_finding_to_issue_row(finding, run_id="run-1")
-    second = google_qec.quality_finding_to_issue_row(finding, run_id="run-1")
+    second = google_qec.quality_finding_to_issue_row(finding, run_id="run-2")
 
-    assert first == second
+    assert first["issue_id"] == second["issue_id"]
+    assert first["issue_id"] == "google_qec.missing_companion_file:experiment_1/sweep.b8"
     assert first["rule_id"] == "google_qec.missing_companion_file"
     assert first["action"] == "rejected"
     assert first["reason"] == "Required companion file is missing"

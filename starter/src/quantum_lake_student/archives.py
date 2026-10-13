@@ -5,8 +5,10 @@ google_qec and qasmbench both come as zip files, so this is shared between them.
 
 from __future__ import annotations
 
+import io
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import BinaryIO
 
 
 def safe_member_names(archive: zipfile.ZipFile) -> list[str]:
@@ -23,10 +25,13 @@ def safe_member_names(archive: zipfile.ZipFile) -> list[str]:
     return names
 
 
-def extract_archive(zip_path: Path, destination: Path) -> Path:
-    # only reads zip_path, never writes to it - Bronze stays untouched
+def extract_archive(
+    zip_source: Path | BinaryIO | bytes, destination: Path
+) -> Path:
+    # only reads zip_source, never writes to it - Bronze stays untouched
     destination.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path) as archive:
+    source = io.BytesIO(zip_source) if isinstance(zip_source, bytes) else zip_source
+    with zipfile.ZipFile(source) as archive:
         names = safe_member_names(archive)
         archive.extractall(destination, members=names)
     return destination
